@@ -182,9 +182,9 @@ class Room:
                    if self.phase == FILLING and self.assignments.get(el) == player_id
                    and el not in self.answers]
         if not pending:
-            return {"type": "your_task", "element": None, "remaining": 0}
+            return {"type": "your_task", "round": self.round_no, "element": None, "remaining": 0}
         el = pending[0]
-        return {"type": "your_task", "element": el, "label": config.ELEMENTS[el],
+        return {"type": "your_task", "round": self.round_no, "element": el, "label": config.ELEMENTS[el],
                 "suggestions": self.suggestions.get(el, []), "remaining": len(pending),
                 "max_len": config.WORD_MAX_LEN}
 
