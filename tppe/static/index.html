@@ -1,1 +1,334 @@
-<!doctype html><title>TPPE</title>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TPPE · 填词造句</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --card: #fff; --ink: #2b2b2b; --muted: #8a8a8a; --line: #e6e2d8;
+    --time: #3b82f6; --place: #16a34a; --person: #ea8a0c; --event: #9333ea; --accent: #e11d48;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 28px; margin: 8px 0 4px; letter-spacing: 2px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+          padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input[type=text] { flex: 1; min-width: 160px; font-size: 16px; padding: 10px 12px;
+          border: 1px solid var(--line); border-radius: 10px; outline: none; }
+  input[type=text]:focus { border-color: var(--ink); }
+  button { font-size: 15px; padding: 10px 16px; border-radius: 10px; border: 1px solid var(--ink);
+           background: var(--ink); color: #fff; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); }
+  button:disabled { opacity: .4; cursor: default; }
+  .hidden { display: none !important; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .code { font-size: 22px; font-weight: 700; letter-spacing: 4px; }
+  .players { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .pill { font-size: 13px; padding: 2px 10px; border-radius: 99px; background: #efece4; }
+  .pill.me { background: var(--ink); color: #fff; }
+  .sentence { font-size: 22px; line-height: 2.4; text-align: center; padding: 8px 0; word-break: break-all; }
+  .slot { display: inline-block; vertical-align: middle; line-height: 1.3; margin: 0 3px; padding: 4px 10px;
+          border-radius: 10px; border: 2px dashed currentColor; font-size: 15px; }
+  .slot small { display: block; font-size: 11px; opacity: .75; }
+  .slot.filled { border-style: solid; }
+  .slot.revealed { border-style: solid; color: #fff !important; font-size: 20px; font-weight: 600; }
+  .slot.revealed small { color: #fff; }
+  .el-time { color: var(--time); } .el-place { color: var(--place); }
+  .el-person { color: var(--person); } .el-event { color: var(--event); }
+  .slot.revealed.el-time { background: var(--time); } .slot.revealed.el-place { background: var(--place); }
+  .slot.revealed.el-person { background: var(--person); } .slot.revealed.el-event { background: var(--event); }
+  .task h3 { margin: 0 0 12px; }
+  .cands { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .cands button { background: #fff; color: var(--ink); border-color: var(--line); }
+  .cands button:hover { border-color: var(--ink); }
+  .counter { font-size: 13px; color: var(--muted); min-width: 44px; text-align: right; }
+  .counter.over { color: var(--accent); }
+  .center { text-align: center; }
+  .muted { color: var(--muted); }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--accent);
+           color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 14px; max-width: 90%; }
+  .warn { font-size: 13px; color: var(--accent); margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TPPE · 填词造句</h1>
+  <p class="sub">四个人，各填一个空：时间、地点、人物、事件。拼出来会发生什么？</p>
+
+  <!-- 大厅 -->
+  <section id="lobby" class="card">
+    <div class="row" style="margin-bottom:12px">
+      <input id="name" type="text" maxlength="12" placeholder="你的昵称（最多 12 字）">
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <button id="btnCreate">创建房间</button>
+    </div>
+    <div class="row">
+      <input id="joinCode" type="text" inputmode="numeric" maxlength="4" placeholder="输入 4 位房间号">
+      <button id="btnJoin" class="ghost">加入房间</button>
+    </div>
+  </section>
+
+  <!-- 房间 -->
+  <section id="room" class="hidden">
+    <div class="card">
+      <div class="topbar">
+        <div>房间号 <span id="roomCode" class="code"></span></div>
+        <div class="row">
+          <span id="roundInfo" class="muted"></span>
+          <button id="btnCopy" class="ghost">复制邀请链接</button>
+        </div>
+      </div>
+      <div id="players" class="players"></div>
+    </div>
+
+    <div id="waitingCard" class="card center">
+      <p class="muted">等大家到齐后，任何人都可以点开始。人不够 4 个也能玩，有人会多填几个空。</p>
+      <button id="btnStart">开始游戏</button>
+    </div>
+
+    <div id="sentenceCard" class="card hidden">
+      <div id="sentence" class="sentence"></div>
+    </div>
+
+    <div id="taskCard" class="card task hidden">
+      <h3 id="taskTitle"></h3>
+      <div id="cands" class="cands"></div>
+      <div class="row">
+        <input id="answer" type="text" maxlength="40" placeholder="">
+        <span id="counter" class="counter"></span>
+        <button id="btnSubmit">提交</button>
+      </div>
+    </div>
+
+    <div id="idleCard" class="card center muted hidden">等待其他玩家填写…</div>
+
+    <div id="revealCard" class="card center hidden">
+      <div class="row" style="justify-content:center">
+        <button id="btnSpeak" class="ghost">🔊 再读一遍</button>
+        <button id="btnNext">下一轮</button>
+      </div>
+      <div id="ttsWarn" class="warn hidden"></div>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const HINTS = {
+  time: "如：周一早高峰、恐龙灭绝那天",
+  place: "如：公司茶水间、火星基地",
+  person: "如：隔壁老王、一只橘猫",
+  event: "做了什么，如：偷吃了全部月饼",
+};
+const MAX_LEN = 20;
+
+let ws = null, me = null, state = null, task = null, spokenRound = 0, leaving = false;
+
+// ---------- 大厅 ----------
+$("name").value = localStorage.getItem("tppe_name") || "";
+const params = new URLSearchParams(location.search);
+if (params.get("room")) $("joinCode").value = params.get("room");
+
+function myName() {
+  const n = $("name").value.trim();
+  if (!n) { toast("先填个昵称吧"); $("name").focus(); return null; }
+  localStorage.setItem("tppe_name", n);
+  return n;
+}
+
+$("btnCreate").onclick = async () => {
+  const n = myName(); if (!n) return;
+  const r = await fetch("/api/rooms", { method: "POST" });
+  const { code } = await r.json();
+  connect(code, n);
+};
+
+$("btnJoin").onclick = async () => {
+  const n = myName(); if (!n) return;
+  const code = $("joinCode").value.trim();
+  if (!/^\d{4}$/.test(code)) return toast("房间号是 4 位数字");
+  const r = await fetch(`/api/rooms/${code}`);
+  if (!r.ok) return toast("房间不存在，可能已经解散了");
+  connect(code, n);
+};
+
+// ---------- 连接 ----------
+function connect(code, name) {
+  unlockSpeech();  // 借这次点击解锁浏览器朗读
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/${code}?name=${encodeURIComponent(name)}`);
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => {
+    if (leaving) return;
+    toast("连接断开了，刷新页面可重新加入");
+    $("lobby").classList.remove("hidden");
+    $("room").classList.add("hidden");
+  };
+  history.replaceState(null, "", `?room=${code}`);
+  $("lobby").classList.add("hidden");
+  $("room").classList.remove("hidden");
+  $("roomCode").textContent = code;
+}
+window.addEventListener("beforeunload", () => { leaving = true; });
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+function handle(m) {
+  if (m.type === "welcome") { me = m; return; }
+  if (m.type === "error") { toast(m.message); return; }
+  if (m.type === "room_state") { state = m; renderState(); return; }
+  if (m.type === "your_task") { task = m; renderTask(); return; }
+}
+
+// ---------- 渲染 ----------
+function renderState() {
+  const s = state;
+  const box = $("players"); box.replaceChildren();
+  for (const p of s.players) {
+    const el = document.createElement("span");
+    el.className = "pill" + (me && p.id === me.player_id ? " me" : "");
+    el.textContent = p.name;
+    box.appendChild(el);
+  }
+  $("roundInfo").textContent = s.round ? `第 ${s.round} 轮` : "";
+  show("waitingCard", s.phase === "waiting");
+  show("sentenceCard", s.phase !== "waiting");
+  show("revealCard", s.phase === "reveal");
+  if (s.segments) renderSentence(s);
+  if (s.phase === "reveal" && spokenRound !== s.round) {
+    spokenRound = s.round;
+    speak(s.sentence);
+  }
+  renderTask();
+}
+
+function renderSentence(s) {
+  const box = $("sentence"); box.replaceChildren();
+  for (const seg of s.segments) {
+    if (seg.text !== undefined) { box.appendChild(document.createTextNode(seg.text)); continue; }
+    const info = s.slots[seg.slot];
+    const chip = document.createElement("span");
+    chip.className = `slot el-${seg.slot}`;
+    const main = document.createElement("span");
+    const sub = document.createElement("small");
+    if (s.phase === "reveal") {
+      chip.classList.add("revealed");
+      main.textContent = s.answers[seg.slot];
+      sub.textContent = `${info.label} · ${info.filler}`;
+    } else {
+      if (info.filled) chip.classList.add("filled");
+      main.textContent = `${info.label} ${info.filled ? "✅" : "⏳"}`;
+      sub.textContent = info.filler;
+    }
+    chip.append(main, sub);
+    box.appendChild(chip);
+  }
+}
+
+let renderedTaskKey = "";
+function renderTask() {
+  const filling = state && state.phase === "filling";
+  const mine = filling && task && task.round === state.round && task.element;
+  show("taskCard", !!mine);
+  show("idleCard", filling && !mine);
+  if (!mine) { renderedTaskKey = ""; return; }
+  const key = `${task.round}:${task.element}`;
+  if (key === renderedTaskKey) return;  // 别人提交引起的广播不要清掉正在输入的内容
+  renderedTaskKey = key;
+  const more = task.remaining > 1 ? `（你还有 ${task.remaining} 个空要填）` : "";
+  $("taskTitle").replaceChildren();
+  const tag = document.createElement("span");
+  tag.className = `el-${task.element}`;
+  tag.textContent = `【${task.label}】`;
+  $("taskTitle").append("请填写 ", tag, more);
+  const cands = $("cands"); cands.replaceChildren();
+  for (const w of task.suggestions) {
+    const b = document.createElement("button");
+    b.textContent = w;
+    b.onclick = () => submit(w);
+    cands.appendChild(b);
+  }
+  if (!task.suggestions.length) {
+    const tip = document.createElement("span");
+    tip.className = "muted"; tip.textContent = "词库里还没有这个元素的词，自己写一个吧";
+    cands.appendChild(tip);
+  }
+  $("answer").value = "";
+  $("answer").placeholder = HINTS[task.element] || "";
+  updateCounter();
+  $("answer").focus();
+}
+
+function submit(text) {
+  text = (text || "").trim();
+  if (!text) return toast("写点什么再提交");
+  if ([...text].length > MAX_LEN) return toast(`不能超过 ${MAX_LEN} 个字符`);
+  send({ type: "submit", element: task.element, text });
+}
+
+function updateCounter() {
+  const n = [...$("answer").value.trim()].length;
+  $("counter").textContent = `${n}/${MAX_LEN}`;
+  $("counter").classList.toggle("over", n > MAX_LEN);
+}
+$("answer").oninput = updateCounter;
+$("answer").onkeydown = e => { if (e.key === "Enter" && !e.isComposing) submit($("answer").value); };
+$("btnSubmit").onclick = () => submit($("answer").value);
+$("btnStart").onclick = () => send({ type: "start" });
+$("btnNext").onclick = () => send({ type: "next" });
+$("btnSpeak").onclick = () => state && state.sentence && speak(state.sentence);
+$("btnCopy").onclick = async () => {
+  const url = `${location.origin}/?room=${$("roomCode").textContent}`;
+  try { await navigator.clipboard.writeText(url); toast("邀请链接已复制"); }
+  catch { prompt("复制这个链接发给朋友：", url); }
+};
+
+// ---------- 浏览器自带 TTS ----------
+const synth = window.speechSynthesis;
+let zhVoice = null;
+function pickVoice() {
+  if (!synth) return;
+  const zh = synth.getVoices().filter(v => /^zh/i.test(v.lang));
+  zhVoice = zh.find(v => /zh[-_]CN/i.test(v.lang) && /Natural|Online|Xiaoxiao/i.test(v.name))
+         || zh.find(v => /zh[-_]CN/i.test(v.lang)) || zh[0] || null;
+}
+if (synth) { pickVoice(); synth.onvoiceschanged = pickVoice; }
+
+function unlockSpeech() {
+  // 在用户点击里先播一段空语音，部分浏览器之后才允许自动朗读
+  if (!synth) return;
+  const u = new SpeechSynthesisUtterance(" ");
+  u.volume = 0;
+  synth.speak(u);
+}
+
+function speak(text) {
+  const warn = $("ttsWarn");
+  if (!synth) { warn.textContent = "当前浏览器不支持语音朗读"; show("ttsWarn", true); return; }
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  if (zhVoice) u.voice = zhVoice;
+  u.rate = 1;
+  synth.speak(u);
+  if (!zhVoice) { warn.textContent = "没找到中文语音，朗读可能不准；换 Edge / Chrome 试试"; show("ttsWarn", true); }
+  else show("ttsWarn", false);
+}
+
+// ---------- 小工具 ----------
+function show(id, on) { $(id).classList.toggle("hidden", !on); }
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add("hidden"), 2600);
+}
+</script>
+</body>
+</html>
