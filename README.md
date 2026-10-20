@@ -16,8 +16,9 @@
 
 ## 部署到服务器（给部署 agent 的操作说明）
 
-> 目标：在一台 Linux 云服务器（阿里云 ECS）上，用 systemd 常驻运行本服务，监听 `0.0.0.0:6333`，外网浏览器访问 `http://<公网IP>:6333/` 即可游玩。
-> 只需要 Python 3.10+ 和 git，不需要数据库服务（SQLite 文件随程序自动创建）。**只能单进程运行**（房间状态在内存里），不要用 gunicorn 多 worker。
+> 目标：在 Linux 云服务器（阿里云 ECS）上用 systemd 常驻运行本服务，监听 `0.0.0.0:6333`，外网访问 `http://<公网IP>:6333/` 即可游玩；
+> 同时启用**自动更新**：每 2 分钟检查 GitHub 上的 main，有新提交就自动拉取、重启，重启后不健康就自动回滚到上一版。
+> 只需要 Python 3.10+、git、curl，不需要数据库服务（SQLite 文件自动创建）。**只能单进程运行**（房间状态在内存里），不要用 gunicorn 多 worker。
 
 ### 1. 装系统依赖
 
@@ -25,34 +26,30 @@
 
 ```bash
 # Ubuntu / Debian
-sudo apt update && sudo apt install -y git python3.11 python3.11-venv curl
+sudo apt update && sudo apt install -y git curl python3.11 python3.11-venv
 # Alibaba Cloud Linux 3 / CentOS / RHEL 系
-sudo dnf install -y git python3.11 curl
+sudo dnf install -y git curl python3.11
 ```
 
-下文用 `python3.11`；如果系统自带的 `python3` 已经 ≥3.10，换成 `python3` 也可以。
+### 2. 拉代码
 
-### 2. 拉代码、建虚拟环境、冒烟
+用**普通用户**（如 `admin`）clone 到自己有写权限的目录，路径随意，例如：
 
 ```bash
-sudo useradd -m -s /bin/bash deploy 2>/dev/null || true
-sudo mkdir -p /srv && sudo chown deploy:deploy /srv
-sudo -u deploy git clone https://github.com/LiYounian/TPPE.git /srv/tppe
-sudo -u deploy bash -lc 'cd /srv/tppe && python3.11 -m venv .venv && ./.venv/bin/pip install -U pip && ./.venv/bin/pip install -r requirements.txt'
-# 冒烟：前台起一下，另开终端 curl 到 {"ok":true,...} 就 Ctrl+C 停掉
-sudo -u deploy bash -lc 'cd /srv/tppe && ./.venv/bin/python -m tppe'
-curl -s http://127.0.0.1:6333/health
+git clone https://github.com/LiYounian/TPPE.git ~/TPPE
 ```
 
-### 3. 用 systemd 常驻
+### 3. 一键安装（服务 + 自动更新）
 
 ```bash
-sudo cp /srv/tppe/deploy/tppe.service /etc/systemd/system/tppe.service   # 路径/用户不同就先改文件里的 User / WorkingDirectory / ExecStart
-sudo systemctl daemon-reload
-sudo systemctl enable --now tppe
-systemctl is-active tppe                      # 期望 active
-curl -s http://127.0.0.1:6333/health          # 期望 {"ok":true,...}
+cd ~/TPPE && sudo bash deploy/install.sh
 ```
+
+脚本会自动完成（可重复执行，重装也安全）：
+1. 找到 Python 3.10+，建 `.venv`，用阿里云 pip 镜像装依赖（换源：`TPPE_PIP_INDEX=<url> sudo -E bash deploy/install.sh`；改端口：`TPPE_PORT=xxxx`）；
+2. 以"执行 sudo 的用户"和当前仓库路径渲染并安装 3 个 systemd 单元：`tppe.service`（游戏服务，崩溃 3 秒自动拉起）、`tppe-autoupdate.service` + `tppe-autoupdate.timer`（每 2 分钟跑一轮 `deploy/update.sh`）；
+3. 写 `/etc/sudoers.d/tppe-autoupdate`：**只**允许该用户免密执行 `systemctl restart tppe`（自动更新要用）；
+4. 启动服务并探活，最后打印 `{"ok":true,...}` 和定时器状态即成功。
 
 ### 4. 放行端口
 
@@ -60,20 +57,28 @@ curl -s http://127.0.0.1:6333/health          # 期望 {"ok":true,...}
 - 系统防火墙如果开着也要放行：`sudo ufw allow 6333/tcp`（Ubuntu）或 `sudo firewall-cmd --permanent --add-port=6333/tcp && sudo firewall-cmd --reload`（CentOS 系）。
 - 外网验证：在自己电脑上打开 `http://<公网IP>:6333/`。
 
-### 5. 更新代码
+### 5. 自动更新是怎么工作的
 
-```bash
-cd /srv/tppe && sudo -u deploy bash deploy/update.sh
-```
+本地 `git push` 到 main 后，约 2 分钟内服务器自动完成更新，无需登录服务器。每一轮（`deploy/update.sh`）：
 
-脚本会拉最新 main，有变更才装依赖并重启，重启后轮询 `/health` 最多约 30 秒，不健康就自动回滚到更新前的版本。`deploy` 用户需要能免密执行重启，加一条窄授权：
+1. **环境自检**：不是 git 仓库 / 缺 `.venv` / 缺 curl → 记日志退出，不往下走；
+2. **检查远端**：`git fetch`（90 秒超时，GitHub 偶尔连不上时本轮跳过、下轮重试）；没有新提交就**静默退出、不重启**；
+3. **拉取**：能快进就快进；服务器上的代码被手改过或分叉 → 强制对齐远端（服务器只读跟随，不要在服务器上改代码）；
+4. **部署**：`requirements.txt` 变了才重装依赖，然后重启服务；
+5. **探活**：轮询 `/health` 最多 30 秒（服务启动需要几秒，不会一探就判死）；
+6. **自愈**：装依赖 / 重启 / 探活任一失败 → 回滚到更新前的版本并重启，记日志（可选 webhook 告警），等远端修好再推送时自动重试。
 
-```bash
-echo 'deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart tppe' | sudo tee /etc/sudoers.d/tppe
-sudo chmod 440 /etc/sudoers.d/tppe && sudo visudo -cf /etc/sudoers.d/tppe
-```
+常用命令：
 
-想定时自动更新，可以加一条 cron（每 5 分钟）：`*/5 * * * * cd /srv/tppe && bash deploy/update.sh >> logs/update.log 2>&1`（加在 deploy 用户的 crontab 里）。
+| 目的 | 命令 |
+|---|---|
+| 看自动更新记录（只有发生更新/失败时才写） | `tail -n 50 ~/TPPE/logs/autoupdate.log` |
+| 看定时器下次什么时候跑 | `systemctl list-timers tppe-autoupdate.timer --no-pager` |
+| 看每轮的运行输出 | `journalctl -u tppe-autoupdate -n 50 --no-pager` |
+| 立刻手动跑一轮 | `cd ~/TPPE && bash deploy/update.sh` |
+| 只看远端有什么新提交、不动任何东西 | `cd ~/TPPE && bash deploy/update.sh --dry-run` |
+| 暂停 / 恢复自动更新 | `sudo systemctl stop tppe-autoupdate.timer` / `sudo systemctl start tppe-autoupdate.timer` |
+| 失败告警 | 编辑 `/etc/systemd/system/tppe-autoupdate.service` 里的 `TPPE_ALERT_WEBHOOK=`，然后 `sudo systemctl daemon-reload` |
 
 ### 6. 看日志 / 排错
 
@@ -81,10 +86,11 @@ sudo chmod 440 /etc/sudoers.d/tppe && sudo visudo -cf /etc/sudoers.d/tppe
 |---|---|
 | 服务状态 | `systemctl status tppe` |
 | 进程输出（含启动失败原因） | `journalctl -u tppe -n 100 --no-pager` |
-| 全量业务日志 | `tail -f /srv/tppe/logs/tppe.log` |
-| 只看警告和错误（**查错先看这个**） | `tail -n 100 /srv/tppe/logs/error.log` |
-| 某个房间发生了什么 | `grep "room=1234" /srv/tppe/logs/tppe.log` |
-| 浏览器端报的错（JS 异常、断线、朗读失败） | `grep "tppe.client" /srv/tppe/logs/tppe.log` |
+| 全量业务日志 | `tail -f ~/TPPE/logs/tppe.log` |
+| 只看警告和错误（**查错先看这个**） | `tail -n 100 ~/TPPE/logs/error.log` |
+| 某个房间发生了什么 | `grep "room=1234" ~/TPPE/logs/tppe.log` |
+| 浏览器端报的错（JS 异常、断线、朗读失败） | `grep "tppe.client" ~/TPPE/logs/tppe.log` |
+| 自动更新做了什么 | `tail -n 50 ~/TPPE/logs/autoupdate.log` |
 | 端口被谁占了 | `sudo lsof -nP -iTCP:6333 -sTCP:LISTEN` |
 
 常见问题：
@@ -92,6 +98,7 @@ sudo chmod 440 /etc/sudoers.d/tppe && sudo visudo -cf /etc/sudoers.d/tppe
 - **启动即退出，日志写"端口 6333 已被占用"**：用上表命令找出占用进程；或者在 service 文件里把 `TPPE_PORT` 改成别的端口（安全组也跟着改）。
 - **启动报"需要 Python 3.10 及以上"**：按第 1 步装 python3.11，删掉 `.venv` 后重建。
 - **能打开页面但进房后一直"连接断开"**：多半是前面挂了 nginx 却没转发 WebSocket，见下一节。
+- **push 了但服务器没更新**：先看 `logs/autoupdate.log`。写着"fetch 失败或超时" → 服务器连 GitHub 不稳，下轮会重试；写着"已回滚" → 新代码起不来，看 `journalctl -u tppe -n 100` 找原因，修好再推；什么都没写 → `systemctl list-timers` 看定时器是否启用。
 
 ### 7.（可选）挂在 nginx 后面 / 用域名
 
@@ -109,14 +116,14 @@ location / {
 }
 ```
 
-用 nginx 时把 service 里的 `TPPE_HOST` 改成 `127.0.0.1`，安全组改为放行 80/443、关掉 6333。
+用 nginx 时把 `/etc/systemd/system/tppe.service` 里的 `TPPE_HOST` 改成 `127.0.0.1`（重跑 install.sh 会覆盖回 0.0.0.0，需再改），安全组改为放行 80/443、关掉 6333。
 
 ### 8. 数据备份
 
 所有持久数据只有一个 SQLite 文件 `data/tppe.db`（词库 + 历史句子）。在线备份：
 
 ```bash
-sqlite3 /srv/tppe/data/tppe.db ".backup '/srv/tppe/data/tppe-$(date +%F).db'"
+sqlite3 ~/TPPE/data/tppe.db ".backup '$HOME/TPPE/data/tppe-$(date +%F).db'"
 ```
 
 ---
@@ -177,7 +184,7 @@ python3 -m venv .venv
 | `tppe/room.py` | 房间与回合状态机（填写 → 朗读 → 投票 → 结算，计时与积分，纯逻辑） |
 | `tppe/server.py` | FastAPI 路由 + 房间 WebSocket + 前端错误上报 |
 | `tppe/static/index.html` | 游戏页面（深色主题） |
-| `deploy/` | `tppe.service`（systemd）、`update.sh`（拉取更新 + 探活 + 回滚） |
+| `deploy/` | `install.sh`（一键安装）、`update.sh`（一轮自动更新 + 探活 + 回滚）、`tppe.service` / `tppe-autoupdate.service` / `tppe-autoupdate.timer`（systemd 单元模板） |
 | `tests/` | pytest |
 | `docs/计划/` · `docs/日志/开发日志.md` | 方案文档 · 工作日志 |
 

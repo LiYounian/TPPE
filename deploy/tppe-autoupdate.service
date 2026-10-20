@@ -1,0 +1,23 @@
+# TPPE 自动更新（跑一轮 deploy/update.sh）。由 tppe-autoupdate.timer 定时触发；由 deploy/install.sh 渲染安装。
+[Unit]
+Description=TPPE 自动拉取更新 + 自愈（一轮）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__DIR__
+# HOME 必须设：否则 git 找不到用户的配置和凭据
+Environment=HOME=__HOME__
+Environment=GIT_TERMINAL_PROMPT=0
+# systemd 默认是 C locale，显式设 UTF-8，日志里的中文才不乱码
+Environment=LANG=C.UTF-8
+Environment=TPPE_BRANCH=main
+Environment=TPPE_PORT=__PORT__
+Environment=TPPE_SERVICE=tppe
+Environment=TPPE_PIP_INDEX=__PIP_INDEX__
+# 失败告警（可选）：取消下一行注释并填 webhook 地址
+#Environment=TPPE_ALERT_WEBHOOK=
+ExecStart=/bin/bash __DIR__/deploy/update.sh
+TimeoutStartSec=600
