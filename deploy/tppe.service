@@ -13,6 +13,8 @@ Environment=TPPE_HOST=0.0.0.0
 Environment=TPPE_PORT=__PORT__
 Environment=TPPE_LOG_LEVEL=INFO
 Environment=PYTHONUNBUFFERED=1
+# 管理后台口令（TPPE_ADMIN_TOKEN=...），由 install.sh 生成，权限 600，不进仓库；文件不存在时后台关闭
+EnvironmentFile=-/etc/tppe/admin.env
 ExecStart=__DIR__/.venv/bin/python -m tppe
 Restart=always
 RestartSec=3

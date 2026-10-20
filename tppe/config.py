@@ -34,3 +34,5 @@ PORT = int(os.environ.get("TPPE_PORT", "6333"))
 DB_PATH = Path(os.environ.get("TPPE_DB_PATH", ROOT_DIR / "data" / "tppe.db"))
 LOG_DIR = Path(os.environ.get("TPPE_LOG_DIR", ROOT_DIR / "logs"))
 LOG_LEVEL = os.environ.get("TPPE_LOG_LEVEL", "INFO")
+# 管理后台口令；为空则后台关闭。服务器上由 /etc/tppe/admin.env 注入（见 deploy/install.sh），不进仓库
+ADMIN_TOKEN = os.environ.get("TPPE_ADMIN_TOKEN", "")

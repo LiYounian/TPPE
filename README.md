@@ -80,7 +80,22 @@ cd ~/TPPE && sudo bash deploy/install.sh
 | 暂停 / 恢复自动更新 | `sudo systemctl stop tppe-autoupdate.timer` / `sudo systemctl start tppe-autoupdate.timer` |
 | 失败告警 | 编辑 `/etc/systemd/system/tppe-autoupdate.service` 里的 `TPPE_ALERT_WEBHOOK=`，然后 `sudo systemctl daemon-reload` |
 
-### 6. 看日志 / 排错
+### 6. 管理后台
+
+浏览器打开 `http://<公网IP>:6333/admin`，输入管理口令即可管理数据：
+- **词库**：按元素筛选、搜索、按使用/点选次数排序；**新增**词；**改字**（原词隐藏，新词继承使用次数）；**删除**（其实是隐藏：不再出现在候选里，可在"只看已删除"里**恢复**）。
+- **历史句子**：每轮拼出的句子、四个空的填写人（⏰ 表示超时随机）、得票。
+- **概览**：各元素词数、已删除数、历史句子数、当前在线房间与人数。
+
+口令：
+- 第一次执行 `install.sh` 时自动生成，**只在安装输出里显示一次**，之后查看：`sudo cat /etc/tppe/admin.env`。
+- 换口令：编辑这个文件，把 `TPPE_ADMIN_TOKEN=` 后面改成新的值（建议 ≥12 位随机字符），然后 `sudo systemctl restart tppe`。
+- 口令文件不存在或为空时，后台整体关闭（返回 404）。同一 IP 1 分钟内输错 10 次会被锁定 5 分钟。
+- 后台的所有写操作都记在 `logs/tppe.log`（`grep tppe.admin`），带操作者 IP；口令不会出现在任何日志里。
+
+短句模板和预置词不在后台管理，它们在仓库的 `tppe/templates.json`、`tppe/seed_words.json` 里，改完推送即可。
+
+### 7. 看日志 / 排错
 
 | 看什么 | 命令 |
 |---|---|
@@ -90,6 +105,7 @@ cd ~/TPPE && sudo bash deploy/install.sh
 | 只看警告和错误（**查错先看这个**） | `tail -n 100 ~/TPPE/logs/error.log` |
 | 某个房间发生了什么 | `grep "room=1234" ~/TPPE/logs/tppe.log` |
 | 浏览器端报的错（JS 异常、断线、朗读失败） | `grep "tppe.client" ~/TPPE/logs/tppe.log` |
+| 管理后台的操作记录 | `grep "tppe.admin" ~/TPPE/logs/tppe.log` |
 | 自动更新做了什么 | `tail -n 50 ~/TPPE/logs/autoupdate.log` |
 | 端口被谁占了 | `sudo lsof -nP -iTCP:6333 -sTCP:LISTEN` |
 
@@ -100,7 +116,7 @@ cd ~/TPPE && sudo bash deploy/install.sh
 - **能打开页面但进房后一直"连接断开"**：多半是前面挂了 nginx 却没转发 WebSocket，见下一节。
 - **push 了但服务器没更新**：先看 `logs/autoupdate.log`。写着"fetch 失败或超时" → 服务器连 GitHub 不稳，下轮会重试；写着"已回滚" → 新代码起不来，看 `journalctl -u tppe -n 100` 找原因，修好再推；什么都没写 → `systemctl list-timers` 看定时器是否启用。
 
-### 7.（可选）挂在 nginx 后面 / 用域名
+### 8.（可选）挂在 nginx 后面 / 用域名
 
 WebSocket 必须带 Upgrade 头，否则进不了房间：
 
@@ -118,7 +134,7 @@ location / {
 
 用 nginx 时把 `/etc/systemd/system/tppe.service` 里的 `TPPE_HOST` 改成 `127.0.0.1`（重跑 install.sh 会覆盖回 0.0.0.0，需再改），安全组改为放行 80/443、关掉 6333。
 
-### 8. 数据备份
+### 9. 数据备份
 
 所有持久数据只有一个 SQLite 文件 `data/tppe.db`（词库 + 历史句子）。在线备份：
 
@@ -146,6 +162,7 @@ python3 -m venv .venv
 | `TPPE_DB_PATH` | `data/tppe.db` | SQLite 文件 |
 | `TPPE_LOG_DIR` | `logs/` | 日志目录：`tppe.log`（全量）+ `error.log`（WARNING 以上） |
 | `TPPE_LOG_LEVEL` | `INFO` | 设成 `DEBUG` 可看到每次广播和候选词抽取 |
+| `TPPE_ADMIN_TOKEN` | 空 | 管理后台口令；为空则后台关闭（服务器上由 `/etc/tppe/admin.env` 注入） |
 
 计时参数（填写 30 秒、投票 20 秒、朗读时长估算）在 `tppe/config.py` 顶部。
 
@@ -162,6 +179,7 @@ python3 -m venv .venv
 | `tppe.wordbank` | 词入库（新词/已有）、被拒原因、候选（DEBUG） |
 | `tppe.db` | 初始化、结构迁移、预置词写入、数据库异常 |
 | `tppe.client` | 浏览器上报：JS 异常、连接异常断开、朗读失败、没有中文语音 |
+| `tppe.admin` | 管理后台：登录、口令错误/锁定、新增/改字/删除/恢复（带 IP 和改动前后内容） |
 
 ## 测试
 
@@ -183,6 +201,7 @@ python3 -m venv .venv
 | `tppe/seed_words.json` | 冷启动预置词，每个元素 15 个 |
 | `tppe/room.py` | 房间与回合状态机（填写 → 朗读 → 投票 → 结算，计时与积分，纯逻辑） |
 | `tppe/server.py` | FastAPI 路由 + 房间 WebSocket + 前端错误上报 |
+| `tppe/admin.py` · `static/admin.html` | 管理后台（口令保护）：词库增删改查、历史句子、概览 |
 | `tppe/static/index.html` | 游戏页面（深色主题） |
 | `deploy/` | `install.sh`（一键安装）、`update.sh`（一轮自动更新 + 探活 + 回滚）、`tppe.service` / `tppe-autoupdate.service` / `tppe-autoupdate.timer`（systemd 单元模板） |
 | `tests/` | pytest |
