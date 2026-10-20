@@ -175,30 +175,33 @@ def create_admin_router(db: Database, manager, token: str, client_ip: Callable,
         return await _set_hidden(word_id, False, ip)
 
     @r.get("/api/admin/templates")
-    async def templates_list(kind: str = "all", q: str = "", _: str = Depends(auth)):
+    async def templates_list(kind: str = "all", q: str = "", slots: int = 0, _: str = Depends(auth)):
         usage = db.template_usage()
         q = q.strip()[:40]
         items = []
         for t in manager.tpls:
             if kind == "meme" and not t.meme or kind == "plain" and t.meme:
                 continue
+            if slots and t.slots != slots:
+                continue
             meme_text = " ".join(t.meme.values()) if t.meme else ""
             if q and q not in t.text and q not in meme_text:
                 continue
             u = usage.get(t.id, {})
-            items.append({"id": t.id, "text": t.text, "segments": t.segments(), "meme": t.meme,
+            items.append({"id": t.id, "text": t.text, "segments": t.segments(), "meme": t.meme, "slots": t.slots,
                           "used": u.get("count", 0), "last_used": u.get("last")})
+        dist = {n: sum(1 for t in manager.tpls if t.slots == n) for n in range(1, config.MAX_SLOTS + 1)}
         return {"items": items, "total": len(manager.tpls),
-                "meme_count": sum(1 for t in manager.tpls if t.meme)}
+                "meme_count": sum(1 for t in manager.tpls if t.meme), "slot_dist": dist}
 
     @r.post("/api/admin/templates/{template_id}/preview")
     async def template_preview(template_id: int, _: str = Depends(auth)):
-        """用当前词库（未隐藏的词）随机试填一句；某元素词库为空时用兜底词。不入库、不影响游戏。"""
+        """用当前词库（未隐藏的词）随机试填模板里有的元素；某元素词库为空时用兜底词。不入库、不影响游戏。"""
         t = next((x for x in manager.tpls if x.id == template_id), None)
         if not t:
             raise HTTPException(404, "模板不存在")
         answers = {}
-        for el in config.ELEMENTS:
+        for el in t.elements:
             w = db.random_words(el, 1)
             answers[el] = w[0]["text"] if w else config.FALLBACK_WORDS[el]
         return {"id": t.id, "sentence": t.fill(answers), "answers": answers}

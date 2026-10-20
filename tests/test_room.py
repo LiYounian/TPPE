@@ -58,15 +58,54 @@ def make_room(mgr, n):
 
 # ---------- 分配 ----------
 @pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 8])
-def test_each_slot_assigned_exactly_once(mgr, n):
+def test_slots_ge_players_and_everyone_gets_one(mgr, clock, n):
+    """空位数 ≥ min(人数, 4)：≤4 人时每人至少一个空；≥4 人时只抽 4 个空的模板，选 4 人各填一个。"""
     room, ps = make_room(mgr, n)
     room.start(ps[0].id)
-    assert set(room.assignments) == set(config.ELEMENTS)
-    per_player = Counter(room.assignments.values())
-    if n >= 4:
-        assert len(per_player) == 4 and set(per_player.values()) == {1}
-    else:
-        assert len(per_player) == n
+    for _ in range(25):
+        t = room.template
+        assert t.slots >= min(n, config.MAX_SLOTS)
+        assert set(room.assignments) == set(t.elements)       # 只分配模板里有的元素
+        per_player = Counter(room.assignments.values())
+        if n <= config.MAX_SLOTS:
+            assert set(per_player) == set(room.players)        # 每人至少一个
+        else:
+            assert t.slots == 4 and len(per_player) == 4 and set(per_player.values()) == {1}
+        to_result(room, clock)
+        room.next_round(ps[0].id)
+
+
+def test_partial_template_reveals_and_archives_only_its_elements(db, bank, clock):
+    import json
+    from tppe.templates import Template
+    t = Template(9, "{时间}，{人物}治好了我的精神内耗。", {"name": "二舅", "source": "测试", "date": "2022-07"})
+    room = RoomManager(bank, db, [t], rng=random.Random(1), clock=clock).create()
+    a, b = room.join("甲"), room.join("乙")
+    room.start(a.id)
+    assert set(room.suggestions) == {"time", "person"}
+    assert room.task_for(a.id)["element"] and room.task_for(b.id)["element"]  # 两人各一个
+    fill_all(room)
+    assert room.phase == REVEAL
+    assert room.sentence.endswith("治好了我的精神内耗。")
+    assert set(room.public_state()["slots"]) == {"time", "person"}
+    with db._connect() as c:
+        assert set(json.loads(c.execute("SELECT answers FROM sentences").fetchone()[0])) == {"time", "person"}
+    clock.advance(config.READ_MAX_SECONDS)
+    room.tick()
+    room.vote(a.id, next(el for el, by in room.answered_by.items() if by != a.id))
+    room.vote(b.id, next(el for el, by in room.answered_by.items() if by != b.id))
+    assert room.phase == RESULT and room.scores[a.id] == room.scores[b.id] == 1
+
+
+def test_one_slot_template_solo_and_timeout(db, bank, clock):
+    from tppe.templates import Template
+    room = RoomManager(bank, db, [Template(5, "{人物}真是个显眼包。")], clock=clock).create()
+    a = room.join("独行")
+    room.start(a.id)
+    clock.advance(config.FILL_SECONDS)
+    room.tick()                                   # 唯一的空超时 → 自动选词 → 揭晓
+    assert room.phase == REVEAL and room.sentence.endswith("真是个显眼包。")
+    assert room.auto_filled == {"person"}
 
 
 def test_fewer_than_4_players_fill_multiple_in_turn(mgr):
@@ -141,7 +180,9 @@ def test_suggestions_at_most_3_with_author(mgr, bank):
     assert room.suggestions["time"] == []  # 空库：只能手填
 
 
-def test_typed_word_appears_as_candidate_with_author(mgr, clock):
+def test_typed_word_appears_as_candidate_with_author(db, bank, clock):
+    from tppe.templates import Template
+    mgr = RoomManager(bank, db, [Template(1, "{时间}{地点}{人物}{事件}")], clock=clock)
     room, (a,) = make_room(mgr, 1)
     room.start(a.id)
     to_result(room, clock)

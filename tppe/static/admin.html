@@ -119,15 +119,16 @@
 
     <!-- 句子模板（只读） -->
     <section id="tab-templates" class="card hidden">
-      <p class="note">模板随代码发布（仓库里的 <code>tppe/templates.json</code>），这里只能查看和试填；想增删改模板，把需求告诉开发，改好推送后服务器约 2 分钟自动生效。</p>
+      <p class="note">每轮只会抽"空位数 ≥ 房间人数"的模板（4 人及以上只抽 4 个空的），保证每人至少填一个。模板随代码发布（仓库里的 <code>tppe/templates.json</code>），这里只能查看和试填；想增删改模板，把需求告诉开发，改好推送后服务器约 2 分钟自动生效。</p>
       <div class="row" style="margin-bottom:10px">
         <select id="tKind"><option value="all">全部</option><option value="plain">普通句</option><option value="meme">热梗句</option></select>
+        <select id="tSlots"><option value="0">任意空位数</option><option value="1">1 个空</option><option value="2">2 个空</option><option value="3">3 个空</option><option value="4">4 个空</option></select>
         <input id="tQ" type="search" placeholder="搜索模板文字或热梗" style="flex:1;min-width:160px">
         <span id="tInfo" class="muted"></span>
       </div>
       <div class="scroll">
         <table>
-          <thead><tr><th>#</th><th>挖空效果（玩家看到的样子） / 原句</th><th>热梗出处</th><th>抽中</th><th>最近</th><th></th></tr></thead>
+          <thead><tr><th>#</th><th>空</th><th>挖空效果（玩家看到的样子） / 原句</th><th>热梗出处</th><th>抽中</th><th>最近</th><th></th></tr></thead>
           <tbody id="tplRows"></tbody>
         </table>
       </div>
@@ -282,12 +283,13 @@ $("wNext").onclick = () => { wq.page++; loadWords(); };
 
 // ---------- 句子模板 ----------
 async function loadTemplates() {
-  const p = new URLSearchParams({ kind: $("tKind").value, q: $("tQ").value.trim() });
+  const p = new URLSearchParams({ kind: $("tKind").value, slots: $("tSlots").value, q: $("tQ").value.trim() });
   try {
     const d = await api(`/api/admin/templates?${p}`);
-    $("tInfo").textContent = `显示 ${d.items.length} 条 · 共 ${d.total} 条（热梗 ${d.meme_count} 条）`;
+    const dist = Object.entries(d.slot_dist).map(([n, c]) => `${n}空 ${c}`).join(" / ");
+    $("tInfo").textContent = `显示 ${d.items.length} 条 · 共 ${d.total} 条（热梗 ${d.meme_count}；${dist}）`;
     const tb = $("tplRows"); tb.replaceChildren();
-    if (!d.items.length) { const tr = tb.insertRow(); const td = cell("没有符合条件的模板", "muted"); td.colSpan = 6; tr.appendChild(td); }
+    if (!d.items.length) { const tr = tb.insertRow(); const td = cell("没有符合条件的模板", "muted"); td.colSpan = 7; tr.appendChild(td); }
     for (const t of d.items) {
       const tr = document.createElement("tr");
       const body = document.createElement("td");
@@ -313,12 +315,13 @@ async function loadTemplates() {
           pv.textContent = `试填：${r.sentence}`;
         } catch (e) { toast(e.message, true); }
       }));
-      tr.append(cell(t.id, "muted"), body, memeTd, cell(t.used, "num"), cell(t.last_used || "—", "muted"), op);
+      tr.append(cell(t.id, "muted"), cell(t.slots, "num"), body, memeTd, cell(t.used, "num"), cell(t.last_used || "—", "muted"), op);
       tb.appendChild(tr);
     }
   } catch (e) { toast(e.message, true); }
 }
 $("tKind").onchange = loadTemplates;
+$("tSlots").onchange = loadTemplates;
 $("tQ").oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(loadTemplates, 300); };
 
 // ---------- 历史句子 ----------

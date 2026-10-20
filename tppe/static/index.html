@@ -85,7 +85,7 @@
 <body>
 <main>
   <h1>TPPE · 填词造句</h1>
-  <p class="sub">每人各填一个空：时间、地点、人物、事件。拼出来会发生什么？读完给最妙的词投一票！</p>
+  <p class="sub">每轮一句话，挖掉了时间、地点、人物、事件中的几个空，每人填一个。拼出来会发生什么？读完给最妙的词投一票！</p>
 
   <!-- 大厅 -->
   <section id="lobby" class="card">
@@ -115,8 +115,8 @@
     </div>
 
     <div id="waitingCard" class="card center">
-      <p class="muted">等大家到齐后，任何人都可以点开始。人不够 4 个也能玩，有人会多填几个空。<br>
-        每个空限时 30 秒，超时会从候选词里随机选一个。</p>
+      <p class="muted">等大家到齐后，任何人都可以点开始。每轮会挑空位数不少于人数的句子，保证每人至少一个空；<br>
+        空比人多时有人会多填几个。每个空限时 30 秒，超时会从候选词里随机选一个。</p>
       <button id="btnStart">开始游戏</button>
     </div>
 
@@ -295,7 +295,7 @@ function renderStatus() {
   if (s.phase === "filling") {
     const done = Object.values(s.slots).filter(x => x.filled).length;
     b.textContent = "✍️ 填写中";
-    st.append(b, ` · 已完成 ${done}/4`);
+    st.append(b, ` · 已完成 ${done}/${Object.keys(s.slots).length}`);
   } else if (s.phase === "reveal") {
     b.textContent = "🔊 朗读中";
     st.append(b, ` · ${secsLeft(phaseDeadline)} 秒后开始投票`);
