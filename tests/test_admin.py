@@ -194,3 +194,44 @@ def test_migrate_v3_to_v4_keeps_data(tmp_path):
     with sqlite3.connect(path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         assert conn.execute("SELECT text, hidden FROM words").fetchall() == [("旧词", 0)]
+
+
+# ---------- 句子模板（只读 + 试填） ----------
+def test_templates_list_counts_filter_and_usage(app_db):
+    from tppe import templates as tmod
+    c, db, _ = app_db
+    all_t = tmod.load()
+    assert c.get("/api/admin/templates").status_code == 401
+    d = c.get("/api/admin/templates", headers=H).json()
+    assert d["total"] == len(all_t) and len(d["items"]) == len(all_t)
+    assert d["meme_count"] == sum(1 for t in all_t if t.meme)
+    first = d["items"][0]
+    assert {"id", "text", "segments", "meme", "used", "last_used"} <= set(first)
+    assert sorted(s["slot"] for s in first["segments"] if "slot" in s) == ["event", "person", "place", "time"]
+
+    memes = c.get("/api/admin/templates", params={"kind": "meme"}, headers=H).json()["items"]
+    plains = c.get("/api/admin/templates", params={"kind": "plain"}, headers=H).json()["items"]
+    assert all(t["meme"] for t in memes) and not any(t["meme"] for t in plains)
+    assert len(memes) + len(plains) == d["total"]
+    hit = c.get("/api/admin/templates", params={"q": "city不city"}, headers=H).json()["items"]
+    assert hit and all("city" in (t["text"] + str(t["meme"])) for t in hit)
+
+    tid = first["id"]
+    db.insert_sentence("1111", tid, "x")
+    db.insert_sentence("1111", tid, "y")
+    used = next(t for t in c.get("/api/admin/templates", headers=H).json()["items"] if t["id"] == tid)
+    assert used["used"] == 2 and used["last_used"]
+
+
+def test_template_preview_uses_visible_words(app_db):
+    c, _, _ = app_db
+    tid = c.get("/api/admin/templates", headers=H).json()["items"][0]["id"]
+    w = find(c, "除夕夜")
+    c.post(f"/api/admin/words/{w['id']}/hide", headers=H)
+    for _ in range(20):
+        r = c.post(f"/api/admin/templates/{tid}/preview", headers=H).json()
+        assert set(r["answers"]) == {"time", "place", "person", "event"}
+        assert all(v in r["sentence"] for v in r["answers"].values())
+        assert r["answers"]["time"] != "除夕夜"   # 已删除的词不参与试填
+    assert c.post("/api/admin/templates/999999/preview", headers=H).status_code == 404
+    assert c.post(f"/api/admin/templates/{tid}/preview").status_code == 401

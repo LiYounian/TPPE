@@ -84,6 +84,7 @@ cd ~/TPPE && sudo bash deploy/install.sh
 
 浏览器打开 `http://<公网IP>:6333/admin`，输入管理口令即可管理数据：
 - **词库**：按元素筛选、搜索、按使用/点选次数排序；**新增**词；**改字**（原词隐藏，新词继承使用次数）；**删除**（其实是隐藏：不再出现在候选里，可在"只看已删除"里**恢复**）。
+- **句子模板**（只读）：每条模板的挖空效果（玩家看到的样子）和原句、热梗出处与时间、被抽中次数；可按普通/热梗筛选、搜索，点"试填"用当前词库随机拼一句看效果。
 - **历史句子**：每轮拼出的句子、四个空的填写人（⏰ 表示超时随机）、得票。
 - **概览**：各元素词数、已删除数、历史句子数、当前在线房间与人数。
 
@@ -93,7 +94,7 @@ cd ~/TPPE && sudo bash deploy/install.sh
 - 口令文件不存在或为空时，后台整体关闭（返回 404）。同一 IP 1 分钟内输错 10 次会被锁定 5 分钟。
 - 后台的所有写操作都记在 `logs/tppe.log`（`grep tppe.admin`），带操作者 IP；口令不会出现在任何日志里。
 
-短句模板和预置词不在后台管理，它们在仓库的 `tppe/templates.json`、`tppe/seed_words.json` 里，改完推送即可。
+短句模板和预置词在后台**只能看不能改**：它们在仓库的 `tppe/templates.json`、`tppe/seed_words.json` 里，随代码发布；服务器自动更新会强制对齐远端，在服务器上直接改文件会被覆盖。要增删改，改仓库里的文件后推送即可。
 
 ### 7. 看日志 / 排错
 
@@ -201,7 +202,7 @@ python3 -m venv .venv
 | `tppe/seed_words.json` | 冷启动预置词，每个元素 15 个 |
 | `tppe/room.py` | 房间与回合状态机（填写 → 朗读 → 投票 → 结算，计时与积分，纯逻辑） |
 | `tppe/server.py` | FastAPI 路由 + 房间 WebSocket + 前端错误上报 |
-| `tppe/admin.py` · `static/admin.html` | 管理后台（口令保护）：词库增删改查、历史句子、概览 |
+| `tppe/admin.py` · `static/admin.html` | 管理后台（口令保护）：词库增删改查、句子模板查看与试填、历史句子、概览 |
 | `tppe/static/index.html` | 游戏页面（深色主题） |
 | `deploy/` | `install.sh`（一键安装）、`update.sh`（一轮自动更新 + 探活 + 回滚）、`tppe.service` / `tppe-autoupdate.service` / `tppe-autoupdate.timer`（systemd 单元模板） |
 | `tests/` | pytest |
