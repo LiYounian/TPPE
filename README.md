@@ -1,9 +1,12 @@
 # TPPE · 多人填词造句网页游戏
 
-多名玩家进同一房间，每轮随机抽一条缺了「时间 / 地点 / 人物 / 事件」的短句模板，
+多名玩家进同一房间（昵称 10 个字符以内），每轮随机抽一条缺了「时间 / 地点 / 人物 / 事件」的短句模板，
 每人被分配填其中一个元素；全部填完后拼成完整句子，用浏览器自带 TTS 朗读出来。
-玩家填过的词进入对应元素的词库，下次作为候选词（至多 3 个）供人一键点选；永远可以自己打字。
-模板里混有一批网络热梗句，揭晓时会显示梗的出处和走红时间。
+
+- **填词**：每个空限时 30 秒。可点候选词（至多 3 个，标明是谁贡献的），也永远可以自己打字（≤20 字符）；超时从候选里随机选一个。
+- **词库**：玩家填过的词都进对应元素的词库（记录最早贡献者），下次就可能出现在候选里。冷启动每个元素有 15 个预置词。
+- **投票**：朗读完后 20 秒投票，点别人填的词投一票（每人每轮 1 票，可改票，不能投自己），每得一票 +1 分，积分在房间内累计。
+- **热梗**：模板里混有一批网络热梗句，揭晓时显示梗的出处和走红时间。
 
 - 技术栈：Python 3.10+（FastAPI + WebSocket）+ SQLite + 单页 HTML（原生 JS，浏览器 Web Speech API 朗读）
 - 默认端口：**6333**
@@ -137,7 +140,9 @@ python3 -m venv .venv
 | `TPPE_LOG_DIR` | `logs/` | 日志目录：`tppe.log`（全量）+ `error.log`（WARNING 以上） |
 | `TPPE_LOG_LEVEL` | `INFO` | 设成 `DEBUG` 可看到每次广播和候选词抽取 |
 
-接口：`GET /health`（健康检查）、`POST /api/rooms`（建房）、`GET /api/rooms/{code}`、`WS /ws/{code}?name=`、`POST /api/client-log`（前端错误上报）。
+计时参数（填写 30 秒、投票 20 秒、朗读时长估算）在 `tppe/config.py` 顶部。
+
+接口：`GET /health`（健康检查）、`POST /api/rooms`（建房）、`GET /api/rooms/{code}`、`WS /ws/{code}?name=`（消息协议见 `tppe/server.py` 顶部）、`POST /api/client-log`（前端错误上报）。
 
 ### 日志命名空间
 
@@ -146,7 +151,7 @@ python3 -m venv .venv
 | `tppe.app` | 启动配置、版本、模板与词库数量、端口占用 |
 | `tppe.http` | 每个 HTTP 请求：方法、路径、状态码、耗时、来源 IP |
 | `tppe.ws` | 每条 WebSocket 连接（`conn=` 编号）：连接、收到的每条消息、被拒操作、断开原因与时长 |
-| `tppe.room` | 建房、加入/离开、每轮分配与模板、每次提交（点选/手填、进度）、掉线改派、揭晓、销毁 |
+| `tppe.room` | 建房、加入/离开、每轮分配与模板、每次提交（点选/手填/超时随机、进度）、掉线改派、揭晓、每张票、投票结算与积分、销毁 |
 | `tppe.wordbank` | 词入库（新词/已有）、被拒原因、候选（DEBUG） |
 | `tppe.db` | 初始化、结构迁移、预置词写入、数据库异常 |
 | `tppe.client` | 浏览器上报：JS 异常、连接异常断开、朗读失败、没有中文语音 |
@@ -165,11 +170,11 @@ python3 -m venv .venv
 | `tppe/__main__.py` | 入口 `python -m tppe`（启动前检查 Python 版本和端口占用） |
 | `tppe/config.py` | 常量（词 ≤20 字符、候选 3 个等）与环境变量配置 |
 | `tppe/logging_setup.py` | 日志配置 |
-| `tppe/db.py` | SQLite：`words` 词库表 + `sentences` 历史句子表，带版本迁移 |
+| `tppe/db.py` | SQLite：`words` 词库表（含贡献者、使用/点选次数）+ `sentences` 历史句子表（含各空答案、填写人、得票、超时项、热梗），带版本迁移 |
 | `tppe/wordbank.py` | 词的规范化、校验、入库、随机候选 |
 | `tppe/templates.py` / `templates.json` | 短句模板（普通句 + 热梗句，热梗带出处和时间） |
 | `tppe/seed_words.json` | 冷启动预置词，每个元素 15 个 |
-| `tppe/room.py` | 房间与回合状态机（纯逻辑） |
+| `tppe/room.py` | 房间与回合状态机（填写 → 朗读 → 投票 → 结算，计时与积分，纯逻辑） |
 | `tppe/server.py` | FastAPI 路由 + 房间 WebSocket + 前端错误上报 |
 | `tppe/static/index.html` | 游戏页面（深色主题） |
 | `deploy/` | `tppe.service`（systemd）、`update.sh`（拉取更新 + 探活 + 回滚） |
