@@ -1,0 +1,12 @@
+# 每 2 分钟检查一次远端；开机 1 分钟后开始。查看：systemctl list-timers tppe-autoupdate.timer
+[Unit]
+Description=TPPE 定时自动更新
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=10s
+Unit=tppe-autoupdate.service
+
+[Install]
+WantedBy=timers.target
