@@ -6,10 +6,13 @@ import platform
 import socket
 import sys
 
-import uvicorn
+if sys.version_info < (3, 10):
+    sys.exit(f"TPPE 需要 Python 3.10 及以上，当前是 {sys.version.split()[0]}")
 
-from tppe import __version__, config
-from tppe.logging_setup import setup_logging
+import uvicorn  # noqa: E402
+
+from tppe import __version__, config  # noqa: E402
+from tppe.logging_setup import setup_logging  # noqa: E402
 
 log = logging.getLogger("tppe.app")
 

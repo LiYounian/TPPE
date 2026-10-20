@@ -1,0 +1,21 @@
+# systemd 服务文件。安装：sudo cp deploy/tppe.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# 默认假设代码在 /srv/tppe、以 deploy 用户运行；路径或用户不同就改下面三处（User / WorkingDirectory / ExecStart）。
+[Unit]
+Description=TPPE 多人填词造句游戏
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/srv/tppe
+Environment=TPPE_HOST=0.0.0.0
+Environment=TPPE_PORT=6333
+Environment=TPPE_LOG_LEVEL=INFO
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/tppe/.venv/bin/python -m tppe
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
