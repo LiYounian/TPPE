@@ -19,7 +19,7 @@ SLOTS_PER_ROUND = len(ELEMENTS)
 RECENT_TEMPLATE_WINDOW = 10   # 同一房间避开最近 N 条模板
 
 HOST = os.environ.get("TPPE_HOST", "0.0.0.0")
-PORT = int(os.environ.get("TPPE_PORT", "8000"))
+PORT = int(os.environ.get("TPPE_PORT", "6333"))
 DB_PATH = Path(os.environ.get("TPPE_DB_PATH", ROOT_DIR / "data" / "tppe.db"))
 LOG_DIR = Path(os.environ.get("TPPE_LOG_DIR", ROOT_DIR / "logs"))
 LOG_LEVEL = os.environ.get("TPPE_LOG_LEVEL", "INFO")

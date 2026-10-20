@@ -1,4 +1,4 @@
-"""入口：python -m tppe [--host 0.0.0.0] [--port 8000]"""
+"""入口：python -m tppe [--host 0.0.0.0] [--port 6333]"""
 
 import argparse
 
