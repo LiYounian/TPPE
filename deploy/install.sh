@@ -53,7 +53,19 @@ echo "$RUN_USER ALL=(root) NOPASSWD: $SYSTEMCTL restart tppe" > "$SUDOERS.tmp"
 chmod 440 "$SUDOERS.tmp"
 visudo -cf "$SUDOERS.tmp" >/dev/null && mv "$SUDOERS.tmp" "$SUDOERS" && say "已安装 ${SUDOERS}（仅允许免密 systemctl restart tppe）"
 
-# 4. 启动
+# 4. 管理后台口令：不存在才生成（重装不换口令）；只 root 可读，systemd 通过 EnvironmentFile 注入
+ADMIN_ENV=/etc/tppe/admin.env
+NEW_TOKEN=""
+mkdir -p /etc/tppe && chmod 700 /etc/tppe
+if [ ! -s "$ADMIN_ENV" ]; then
+  NEW_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
+  umask 077
+  echo "TPPE_ADMIN_TOKEN=${NEW_TOKEN}" > "$ADMIN_ENV"
+  say "已生成管理后台口令 ${ADMIN_ENV}"
+fi
+chmod 600 "$ADMIN_ENV"
+
+# 5. 启动
 systemctl daemon-reload
 systemctl enable -q tppe
 systemctl restart tppe
@@ -64,6 +76,12 @@ if curl -fsS -m 3 "http://127.0.0.1:$PORT/health"; then
   echo; say "✅ 服务健康，自动更新定时器已启用："
   systemctl list-timers tppe-autoupdate.timer --no-pager | head -3
   say "记得在阿里云安全组放行 TCP ${PORT}；之后 push 到 main，约 2 分钟内服务器自动更新。"
+  say "管理后台：http://<服务器公网IP>:${PORT}/admin"
+  if [ -n "$NEW_TOKEN" ]; then
+    say "管理口令（只显示这一次，之后用 sudo cat ${ADMIN_ENV} 查看）：${NEW_TOKEN}"
+  else
+    say "管理口令沿用已有的，查看：sudo cat ${ADMIN_ENV}"
+  fi
 else
   say "❌ 服务没起来，看日志：journalctl -u tppe -n 50 --no-pager"; exit 1
 fi

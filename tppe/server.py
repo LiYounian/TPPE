@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, Response
 
 from tppe import __version__, config, templates
 from tppe.db import Database
+from tppe.admin import create_admin_router
 from tppe.room import GameError, Room, RoomManager, Timing
 from tppe.wordbank import WordBank, load_seed
 
@@ -46,7 +47,7 @@ def _client_ip(headers, client) -> str:
 
 
 def create_app(db_path: Path | str = config.DB_PATH, timing: Timing | None = None,
-               tick_seconds: float = config.TICK_SECONDS) -> FastAPI:
+               tick_seconds: float = config.TICK_SECONDS, admin_token: str | None = None) -> FastAPI:
     db = Database(db_path)
     db.init_db(load_seed())
     tpls = templates.load()
@@ -79,6 +80,8 @@ def create_app(db_path: Path | str = config.DB_PATH, timing: Timing | None = Non
 
     app = FastAPI(title="TPPE", version=__version__, lifespan=lifespan)
     app.state.manager, app.state.db = manager, db
+    app.include_router(create_admin_router(
+        db, manager, config.ADMIN_TOKEN if admin_token is None else admin_token, _client_ip))
 
     # ---------- HTTP 请求日志 ----------
     @app.middleware("http")
