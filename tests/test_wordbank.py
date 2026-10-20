@@ -24,7 +24,7 @@ def test_empty_bank_suggests_nothing(bank):
 def test_suggest_returns_what_exists_when_fewer_than_3(bank):
     bank.submit("place", "火星")
     bank.submit("place", "食堂")
-    assert sorted(bank.suggest("place")) == ["火星", "食堂"]
+    assert sorted(w["text"] for w in bank.suggest("place")) == ["火星", "食堂"]
 
 
 def test_suggest_at_most_3_unique(bank):
@@ -33,7 +33,7 @@ def test_suggest_at_most_3_unique(bank):
     for _ in range(20):
         s = bank.suggest("person")
         assert len(s) == config.SUGGEST_COUNT
-        assert len(set(s)) == len(s)
+        assert len({w["text"] for w in s}) == len(s)
 
 
 def test_suggest_only_from_same_element(bank):
@@ -44,7 +44,7 @@ def test_suggest_only_from_same_element(bank):
 def test_player_input_is_stored_and_can_be_suggested_later(bank, db):
     bank.submit("event", "  偷吃了月饼 ")
     assert db.count_words("event") == 1
-    assert bank.suggest("event") == ["偷吃了月饼"]
+    assert bank.suggest("event") == [{"text": "偷吃了月饼", "by": None}]
 
 
 def test_duplicate_word_not_stored_twice(bank, db):
@@ -86,3 +86,14 @@ def test_seed_insert_is_idempotent(tmp_path):
     d.init_db(seed)
     assert d.count_words() == sum(len(v) for v in seed.values())
     assert len(WordBank(d).suggest("time")) == config.SUGGEST_COUNT
+
+
+def test_suggestion_shows_first_author_and_seed_has_none(tmp_path):
+    from tppe.db import Database
+    d = Database(tmp_path / "a.db")
+    d.init_db({"time": ["预置的词"]})
+    b = WordBank(d)
+    b.submit("place", "火星", author="小明")
+    b.submit("place", "火星", author="小红")  # 后来者不覆盖最早贡献者
+    assert b.suggest("place") == [{"text": "火星", "by": "小明"}]
+    assert b.suggest("time") == [{"text": "预置的词", "by": None}]

@@ -42,7 +42,7 @@ class WordBank:
     def __init__(self, db: Database):
         self.db = db
 
-    def submit(self, element: str, raw: str, picked: bool = False) -> str:
+    def submit(self, element: str, raw: str, picked: bool = False, author: str | None = None) -> str:
         """校验并入库，返回规范化后的词；不合法抛 ValueError（消息可直接给玩家看）。
         picked=True 表示玩家点的是候选词（只用于统计 pick_count 和日志）。"""
         if element not in config.ELEMENTS:
@@ -52,13 +52,13 @@ class WordBank:
         if not ok:
             log.info("词被拒 [%s] %r: %s", element, raw[:60], why)
             raise ValueError(why)
-        is_new = self.db.insert_word(element, text, picked=picked)
-        log.info("词入库 [%s] %r（%s，%s）", element, text, "新词" if is_new else "已有",
+        is_new = self.db.insert_word(element, text, picked=picked, author=author)
+        log.info("词入库 [%s] %r by %s（%s，%s）", element, text, author, "新词" if is_new else "已有",
                  "点选候选" if picked else "手动输入")
         return text
 
-    def suggest(self, element: str, exclude=()) -> list[str]:
-        """至多 SUGGEST_COUNT 个随机候选，空库返回 []。"""
+    def suggest(self, element: str, exclude=()) -> list[dict]:
+        """至多 SUGGEST_COUNT 个随机候选 [{"text", "by"}]，空库返回 []。"""
         words = self.db.random_words(element, config.SUGGEST_COUNT, exclude)
         log.debug("候选 [%s] %s", element, words)
         return words

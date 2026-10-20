@@ -1,15 +1,19 @@
 """FastAPI：静态页面 + 建房 HTTP 接口 + 房间 WebSocket + 前端错误上报。
 
 WebSocket 消息（JSON）：
-  客户端→服务端  {"type": "start"} / {"type": "submit", "element", "text", "picked"} / {"type": "next"}
+  客户端→服务端  {"type": "start"} / {"type": "submit", "element", "text", "picked"} /
+                 {"type": "vote", "element"} / {"type": "next"} / {"type": "ping"}
   服务端→客户端  welcome / room_state / your_task / error
 每个事件处理完后，向房间内所有人推一次 room_state + 各自的 your_task。
+后台定时任务每 TICK_SECONDS 调一次 room.tick()（填写超时、朗读结束、投票截止），有变化同样广播。
 """
 
+import asyncio
 import json
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -17,7 +21,7 @@ from fastapi.responses import FileResponse
 
 from tppe import __version__, config, templates
 from tppe.db import Database
-from tppe.room import GameError, Room, RoomManager
+from tppe.room import GameError, Room, RoomManager, Timing
 from tppe.wordbank import WordBank, load_seed
 
 log = logging.getLogger("tppe.app")
@@ -41,16 +45,39 @@ def _client_ip(headers, client) -> str:
     return client.host if client else "?"
 
 
-def create_app(db_path: Path | str = config.DB_PATH) -> FastAPI:
+def create_app(db_path: Path | str = config.DB_PATH, timing: Timing | None = None,
+               tick_seconds: float = config.TICK_SECONDS) -> FastAPI:
     db = Database(db_path)
     db.init_db(load_seed())
     tpls = templates.load()
-    manager = RoomManager(WordBank(db), db, tpls)
+    timing = timing or Timing()
+    manager = RoomManager(WordBank(db), db, tpls, timing=timing)
     sockets: dict[str, dict[str, WebSocket]] = {}  # room_code → {player_id: ws}
-    log.info("TPPE v%s 就绪：模板 %d 条（热梗 %d 条），词库 %s", __version__, len(tpls),
-             sum(1 for t in tpls if t.meme), db.word_stats())
+    log.info("TPPE v%s 就绪：模板 %d 条（热梗 %d 条），词库 %s，计时 %s", __version__, len(tpls),
+             sum(1 for t in tpls if t.meme), db.word_stats(), timing)
 
-    app = FastAPI(title="TPPE", version=__version__)
+    async def ticker():
+        """定时推进所有房间的计时状态；单个房间出错只记日志，不影响其他房间。"""
+        while True:
+            await asyncio.sleep(tick_seconds)
+            for room in list(manager.rooms.values()):
+                try:
+                    if room.tick():
+                        await broadcast(room, "tick")
+                except Exception:
+                    log.exception("room=%s tick 异常", room.code)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        task = asyncio.create_task(ticker())
+        log.info("计时任务已启动（间隔 %.2fs）", tick_seconds)
+        try:
+            yield
+        finally:
+            task.cancel()
+            log.info("服务关闭（房间 %d 个）", len(manager.rooms))
+
+    app = FastAPI(title="TPPE", version=__version__, lifespan=lifespan)
     app.state.manager, app.state.db = manager, db
 
     # ---------- HTTP 请求日志 ----------
@@ -159,6 +186,8 @@ def create_app(db_path: Path | str = config.DB_PATH) -> FastAPI:
                         room.start(player.id)
                     elif kind == "next":
                         room.next_round(player.id)
+                    elif kind == "vote":
+                        room.vote(player.id, str(msg.get("element", "")))
                     elif kind == "submit":
                         room.submit(player.id, str(msg.get("element", "")), str(msg.get("text", "")),
                                     picked=bool(msg.get("picked")))
