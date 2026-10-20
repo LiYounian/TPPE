@@ -62,7 +62,7 @@ cd ~/TPPE && sudo bash deploy/install.sh
 本地 `git push` 到 main 后，约 2 分钟内服务器自动完成更新，无需登录服务器。每一轮（`deploy/update.sh`）：
 
 1. **环境自检**：不是 git 仓库 / 缺 `.venv` / 缺 curl → 记日志退出，不往下走；
-2. **检查远端**：`git fetch`（90 秒超时，GitHub 偶尔连不上时本轮跳过、下轮重试）；没有新提交就**静默退出、不重启**；
+2. **检查远端**：`git fetch`（30 秒超时）；没有新提交就**静默退出、不重启**。国内服务器连 GitHub 时好时坏：偶尔失败只算网络波动，**不写日志、不告警**，下轮重试；**连续失败 5 次（约 10 分钟）**才在日志里记一条（之后每小时提醒一次），恢复时也记一条；
 3. **拉取**：能快进就快进；服务器上的代码被手改过或分叉 → 强制对齐远端（服务器只读跟随，不要在服务器上改代码）；
 4. **部署**：`requirements.txt` 变了才重装依赖，然后重启服务；
 5. **探活**：轮询 `/health` 最多 30 秒（服务启动需要几秒，不会一探就判死）；
@@ -114,7 +114,7 @@ cd ~/TPPE && sudo bash deploy/install.sh
 - **启动即退出，日志写"端口 6333 已被占用"**：用上表命令找出占用进程；或者在 service 文件里把 `TPPE_PORT` 改成别的端口（安全组也跟着改）。
 - **启动报"需要 Python 3.10 及以上"**：按第 1 步装 python3.11，删掉 `.venv` 后重建。
 - **能打开页面但进房后一直"连接断开"**：多半是前面挂了 nginx 却没转发 WebSocket，见下一节。
-- **push 了但服务器没更新**：先看 `logs/autoupdate.log`。写着"fetch 失败或超时" → 服务器连 GitHub 不稳，下轮会重试；写着"已回滚" → 新代码起不来，看 `journalctl -u tppe -n 100` 找原因，修好再推；什么都没写 → `systemctl list-timers` 看定时器是否启用。
+- **push 了但服务器没更新**：先看 `logs/autoupdate.log`。写着"已连续失败 N 次" → 服务器连不上 GitHub（偶发失败不会记录，只能在 `journalctl -u tppe-autoupdate` 里看到），会自动重试；写着"已回滚" → 新代码起不来，看 `journalctl -u tppe -n 100` 找原因，修好再推；什么都没写 → `systemctl list-timers` 看定时器是否启用。
 
 ### 8.（可选）挂在 nginx 后面 / 用域名
 
