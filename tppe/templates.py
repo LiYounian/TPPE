@@ -1,7 +1,7 @@
 """短句模板：加载、校验、随机抽取、挖空展示、拼句。
 
 templates.json 是对象数组，每条：
-  {"id": 整数且全局唯一, "text": "含 {时间}{地点}{人物}{事件} 各一次的句子",
+  {"id": 整数且全局唯一, "text": "含 1–4 个不同元素占位（{时间}{地点}{人物}{事件}，每个最多一次）的句子",
    "meme": null 或 {"name": 梗名, "source": 出处（和什么有关）, "date": "YYYY[-MM[-DD]]"}}
 id 一经发布不要改动或复用（历史句子表按 id 关联）；新模板用新 id 追加。
 """
@@ -40,22 +40,33 @@ class Template:
             out.append({"text": self.text[pos:]})
         return out
 
+    @property
+    def elements(self) -> list[str]:
+        """模板含有的元素（按在句中出现的顺序），如 ["time", "person"]。"""
+        return [_NAME_TO_KEY[n] for n in _PH_RE.findall(self.text)]
+
+    @property
+    def slots(self) -> int:
+        return len(self.elements)
+
     def fill(self, answers: dict[str, str]) -> str:
-        missing = set(config.ELEMENTS) - set(answers)
+        missing = set(self.elements) - set(answers)
         if missing:
             raise ValueError(f"缺少元素: {missing}")
         return _PH_RE.sub(lambda m: answers[_NAME_TO_KEY[m.group(1)]], self.text)
 
 
 def check(text: str) -> None:
-    """每条模板必须四个占位各恰好出现一次、且没有未知占位。"""
+    """模板含 1–4 个占位，只能是四个元素之一，且同一元素最多出现一次。"""
     names = _PH_RE.findall(text)
     unknown = set(names) - set(_NAME_TO_KEY)
     if unknown:
         raise ValueError(f"模板含未知占位 {unknown}: {text}")
-    for name in _NAME_TO_KEY:
-        if names.count(name) != 1:
-            raise ValueError(f"模板中 {{{name}}} 出现 {names.count(name)} 次: {text}")
+    if not names:
+        raise ValueError(f"模板至少要有一个空: {text}")
+    for name in set(names):
+        if names.count(name) > 1:
+            raise ValueError(f"模板中 {{{name}}} 出现 {names.count(name)} 次（每个元素最多一次）: {text}")
 
 
 def check_meme(meme: dict | None, tid: int) -> None:
@@ -83,7 +94,12 @@ def load(path=TEMPLATE_PATH) -> list[Template]:
     return out
 
 
-def pick(templates: list[Template], recent: list[int] = (), rng=random) -> Template:
-    """随机抽一条，尽量避开最近用过的；全用过就放开限制。"""
-    pool = [t for t in templates if t.id not in set(recent)] or templates
+def pick(templates: list[Template], recent: list[int] = (), rng=random, min_slots: int = 1) -> Template:
+    """随机抽一条空位数 ≥ min_slots 的模板（保证每个玩家至少一个空），尽量避开最近用过的。
+    没有够格的模板时退回空位最多的那些；够格的都用过了就放开"避开最近"的限制。"""
+    eligible = [t for t in templates if t.slots >= min_slots]
+    if not eligible:
+        most = max(t.slots for t in templates)
+        eligible = [t for t in templates if t.slots == most]
+    pool = [t for t in eligible if t.id not in set(recent)] or eligible
     return rng.choice(pool)

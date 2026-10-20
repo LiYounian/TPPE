@@ -184,35 +184,38 @@ class Room:
     # ---------- 内部 ----------
     def _new_round(self) -> None:
         self.round_no += 1
-        self.template = templates.pick(self.tpls, self.recent_templates, self.rng)
+        need = min(len(self.players), config.MAX_SLOTS)  # 空位数 ≥ 人数，保证每人至少一个空
+        self.template = templates.pick(self.tpls, self.recent_templates, self.rng, min_slots=need)
         self.recent_templates = (self.recent_templates + [self.template.id])[-config.RECENT_TEMPLATE_WINDOW:]
         self.assignments = self._assign()
         self.answers, self.answered_by, self.auto_filled = {}, {}, set()
         self.sentence, self.sentence_id, self.fillers_by_element = "", None, {}
         self.votes, self.tally, self.deadlines = {}, {}, {}
-        self.suggestions = {el: self.bank.suggest(el) for el in config.ELEMENTS}
+        self.suggestions = {el: self.bank.suggest(el) for el in self.template.elements}
         self.last_fillers = set(self.assignments.values())
         self.phase = FILLING
         self._arm_deadlines()
-        log.info("room=%s 第%d轮开始 模板#%d%s 分配=%s 候选=%s", self.code, self.round_no,
-                 self.template.id, f"（梗：{self.template.meme['name']}）" if self.template.meme else "",
+        log.info("room=%s 第%d轮开始 %d人 模板#%d（%d空）%s 分配=%s 候选=%s", self.code, self.round_no,
+                 len(self.players), self.template.id, self.template.slots,
+                 f"（梗：{self.template.meme['name']}）" if self.template.meme else "",
                  {el: self.players[pid].name for el, pid in self.assignments.items()},
                  {el: [w["text"] for w in ws] for el, ws in self.suggestions.items()})
 
     def _assign(self) -> dict[str, str]:
-        """4 个空位随机分配。≥4 人：选 4 人，上轮旁观的优先；<4 人：轮流多分。"""
+        """把模板的 n 个空随机分给玩家。人数 ≤ n：每人至少一个、多出的轮流分；
+        人数 > n（只会在 ≥5 人时出现）：选 n 人，上轮旁观的优先。"""
         ids = list(self.players)
         benched = [i for i in ids if i not in self.last_fillers]
         others = [i for i in ids if i in self.last_fillers]
         self.rng.shuffle(benched)
         self.rng.shuffle(others)
-        chosen = (benched + others)[: config.SLOTS_PER_ROUND]
-        elements = list(config.ELEMENTS)
+        chosen = (benched + others)[: self.template.slots]
+        elements = list(self.template.elements)
         self.rng.shuffle(elements)
         return {el: chosen[i % len(chosen)] for i, el in enumerate(elements)}
 
     def _pending_of(self, player_id: str) -> list[str]:
-        return [el for el in config.ELEMENTS
+        return [el for el in self.template.elements
                 if self.assignments.get(el) == player_id and el not in self.answers]
 
     def _arm_deadlines(self) -> None:
@@ -231,8 +234,8 @@ class Room:
         self.deadlines.pop(element, None)
         log.info("room=%s 第%d轮 [%s] ← %r by %s（%s）进度 %d/%d", self.code, self.round_no, element,
                  word, self.players[player_id].name if player_id in self.players else player_id, how,
-                 len(self.answers), config.SLOTS_PER_ROUND)
-        if len(self.answers) == config.SLOTS_PER_ROUND:
+                 len(self.answers), self.template.slots)
+        if len(self.answers) == self.template.slots:
             self._reveal()
         else:
             self._arm_deadlines()
@@ -272,7 +275,7 @@ class Room:
             self.sentence_id = self.db.insert_sentence(
                 self.code, self.template.id, self.sentence, round_no=self.round_no, meme=meme,
                 answers={el: {"text": self.answers[el], "by": self.fillers_by_element[el]}
-                         for el in config.ELEMENTS},
+                         for el in self.template.elements},
                 auto_filled=sorted(self.auto_filled))
         except Exception:  # 历史句子只是存档，写失败不影响本轮
             log.exception("room=%s 历史句子写库失败", self.code)
