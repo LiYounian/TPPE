@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from tppe import __version__, config, templates
 from tppe.db import Database
@@ -115,6 +115,14 @@ def create_app(db_path: Path | str = config.DB_PATH, timing: Timing | None = Non
     async def index():
         return FileResponse(INDEX_HTML, media_type="text/html")
 
+    favicon = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" '
+               'fill="#1b1e24"/><text x="32" y="44" font-size="34" text-anchor="middle" fill="#fbbf24">填</text></svg>')
+
+    @app.get("/favicon.svg")
+    @app.get("/favicon.ico")
+    async def favicon_route():
+        return Response(favicon, media_type="image/svg+xml")
+
     @app.get("/health")
     async def health():
         return {"ok": True, "version": __version__, "rooms": len(manager.rooms),
@@ -180,7 +188,7 @@ def create_app(db_path: Path | str = config.DB_PATH, timing: Timing | None = Non
                     continue
                 if kind == "ping":
                     continue
-                ws_log.info("%s ← %s", tag, _clip(raw))
+                ws_log.info("%s ← %s", tag, _clip(msg))
                 try:
                     if kind == "start":
                         room.start(player.id)
