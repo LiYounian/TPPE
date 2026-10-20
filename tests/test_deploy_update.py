@@ -169,3 +169,44 @@ def test_scripts_brace_vars_before_non_ascii():
     for p in (ROOT / "deploy").glob("*.sh"):
         bad = re.findall(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", p.read_text(encoding="utf-8"))
         assert not bad, f"{p.name}: {bad}"
+
+
+def test_fetch_failures_are_quiet_until_threshold_then_recover(world):
+    """国内服务器连 GitHub 时好时坏：偶发失败不写日志；连续 5 次才记一条；之后每 30 次提醒一次；恢复时记一条并清零。"""
+    w = world
+    good_url = sh("git remote get-url origin", w["srv"]).stdout.strip()
+    sh("git remote set-url origin /nonexistent/repo.git", w["srv"])
+    for i in range(1, 5):
+        r = w["update"]()
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert f"连续第 {i} 次" in r.stdout
+    assert "失败" not in autolog(w)                    # 前 4 次：日志文件里什么都没有
+
+    r = w["update"]()
+    assert r.returncode == 1
+    assert "已连续失败 5 次" in autolog(w)             # 第 5 次：记一条
+
+    for _ in range(29):                                 # 第 6~34 次：不重复刷
+        assert w["update"]().returncode == 0
+    assert autolog(w).count("已连续失败") == 1
+    assert w["update"]().returncode == 1                # 第 35 次（5 + 30）：再提醒一次
+    assert "已连续失败 35 次" in autolog(w)
+
+    sh(f"git remote set-url origin {good_url}", w["srv"])
+    new = set_version(w, "9.9.5")
+    assert w["update"]().returncode == 0
+    log_text = autolog(w)
+    assert "已恢复（此前连续失败 35 次）" in log_text and "更新成功" in log_text
+    assert srv_head(w) == new
+    assert not (w["srv"] / "logs" / ".fetch_failures").exists()
+
+
+def test_single_fetch_failure_then_success_leaves_no_trace(world):
+    w = world
+    good_url = sh("git remote get-url origin", w["srv"]).stdout.strip()
+    sh("git remote set-url origin /nonexistent/repo.git", w["srv"])
+    assert w["update"]().returncode == 0
+    sh(f"git remote set-url origin {good_url}", w["srv"])
+    assert w["update"]().returncode == 0
+    assert autolog(w) == ""                             # 一次波动 + 恢复：日志文件保持干净
+    assert not (w["srv"] / "logs" / ".fetch_failures").exists()

@@ -3,6 +3,8 @@
 #
 #   ① 环境自检：git 仓库 / .venv / curl，缺了就报错退出（不往下走）
 #   ② 检查远端：git fetch（带超时），没有新提交 → 静默退出，不重启
+#      国内服务器连 GitHub 时好时坏：偶尔失败只算网络波动，不写日志、不告警，下轮重试；
+#      连续失败达到阈值（默认 5 次 ≈ 10 分钟）才记一条失败并告警，之后每 30 次（≈1 小时）提醒一次；恢复时记一条
 #   ③ 拉取：merge --ff-only；快进失败（本地被改过或分叉）→ reset --hard 跟随远端（服务器只读跟随）
 #   ④ 部署：requirements.txt 变了才 pip install → 重启服务
 #   ⑤ 探活：轮询 /health（默认 15 次 × 2 秒，给服务启动留时间），通过即完成
@@ -16,7 +18,8 @@
 #   TPPE_RESTART_CMD="sudo -n systemctl restart tppe"   重启命令（本地测试时可替换）
 #   TPPE_PIP_INDEX=<pip 镜像地址>                         国内服务器建议设阿里云镜像
 #   TPPE_HEALTH_TRIES=15  TPPE_HEALTH_INTERVAL=2          探活轮询次数与间隔（秒）
-#   TPPE_FETCH_TIMEOUT=90                                 git fetch 超时（秒）
+#   TPPE_FETCH_TIMEOUT=30                                 git fetch 超时（秒）
+#   TPPE_FETCH_FAIL_THRESHOLD=5  TPPE_FETCH_FAIL_REPEAT=30   连续失败几次才记日志/告警、之后每几次再提醒
 #   TPPE_ALERT_WEBHOOK=<url>                              失败时 POST 一条 JSON 告警（可选）
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -28,7 +31,9 @@ RESTART_CMD="${TPPE_RESTART_CMD:-sudo -n systemctl restart $SERVICE}"
 PIP_INDEX="${TPPE_PIP_INDEX:-}"
 HEALTH_TRIES="${TPPE_HEALTH_TRIES:-15}"
 HEALTH_INTERVAL="${TPPE_HEALTH_INTERVAL:-2}"
-FETCH_TIMEOUT="${TPPE_FETCH_TIMEOUT:-90}"
+FETCH_TIMEOUT="${TPPE_FETCH_TIMEOUT:-30}"
+FAIL_THRESHOLD="${TPPE_FETCH_FAIL_THRESHOLD:-5}"
+FAIL_REPEAT="${TPPE_FETCH_FAIL_REPEAT:-30}"
 ALERT_WEBHOOK="${TPPE_ALERT_WEBHOOK:-}"
 PY=./.venv/bin/python
 DRY_RUN=0
@@ -76,9 +81,26 @@ pip_install() {
 # ② 检查远端
 TIMEOUT_CMD=()
 command -v timeout >/dev/null 2>&1 && TIMEOUT_CMD=(timeout "$FETCH_TIMEOUT")
-if ! GIT_TERMINAL_PROMPT=0 ${TIMEOUT_CMD[@]+"${TIMEOUT_CMD[@]}"} git fetch -q origin "$BRANCH" 2>>"$LOG_FILE"; then
-  fail "git fetch origin/$BRANCH 失败或超时（${FETCH_TIMEOUT}s），本轮不更新，下轮重试"
+FAIL_FILE=logs/.fetch_failures   # 连续失败次数
+fails=$(cat "$FAIL_FILE" 2>/dev/null || echo 0)
+case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+# lowSpeed：连接卡住（20 秒内低于 1KB/s）就提前放弃，不必干等到超时
+if ! fetch_err=$(GIT_TERMINAL_PROMPT=0 ${TIMEOUT_CMD[@]+"${TIMEOUT_CMD[@]}"} \
+      git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch -q origin "$BRANCH" 2>&1); then
+  fails=$((fails + 1))
+  echo "$fails" > "$FAIL_FILE"
+  if [ "$fails" -ge "$FAIL_THRESHOLD" ] && [ $(((fails - FAIL_THRESHOLD) % FAIL_REPEAT)) -eq 0 ]; then
+    fail "git fetch origin/${BRANCH} 已连续失败 ${fails} 次（约 $((fails * 2)) 分钟拉不到远端）：$(echo "$fetch_err" | tail -1)"
+  fi
+  # 偶发失败：只在 journal 里留一行，不写日志文件、不告警
+  echo "git fetch 失败（连续第 ${fails} 次，未到阈值 ${FAIL_THRESHOLD}，下轮重试）：$(echo "$fetch_err" | tail -1)"
+  exit 0
 fi
+if [ "$fails" -ge "$FAIL_THRESHOLD" ]; then
+  log "git fetch 已恢复（此前连续失败 ${fails} 次）"
+  alert "git fetch 已恢复（此前连续失败 ${fails} 次）"
+fi
+[ "$fails" -gt 0 ] && rm -f "$FAIL_FILE"
 before=$(git rev-parse HEAD)
 target=$(git rev-parse "origin/$BRANCH")
 if [ "$before" = "$target" ]; then
