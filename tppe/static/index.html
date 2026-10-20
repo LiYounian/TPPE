@@ -58,6 +58,9 @@
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--accent);
            color: var(--on-accent); font-weight: 600; padding: 10px 18px; border-radius: 10px; font-size: 14px; max-width: 90%; }
   .warn { font-size: 13px; color: var(--accent); margin-top: 8px; }
+  .meme { margin-top: 14px; padding: 10px 14px; border-radius: 10px; background: var(--chip);
+          font-size: 13px; color: var(--muted); text-align: left; }
+  .meme b { color: var(--person); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -99,6 +102,7 @@
 
     <div id="sentenceCard" class="card hidden">
       <div id="sentence" class="sentence"></div>
+      <div id="meme" class="meme hidden"></div>
     </div>
 
     <div id="taskCard" class="card task hidden">
@@ -134,7 +138,19 @@ const HINTS = {
 };
 const MAX_LEN = 20;
 
-let ws = null, me = null, state = null, task = null, spokenRound = 0, leaving = false;
+let ws = null, me = null, state = null, task = null, spokenRound = 0, leaving = false, roomCode = null;
+
+// ---------- 错误上报到服务端日志（tppe.client），便于查错 ----------
+function report(kind, message, level = "warning") {
+  try {
+    const body = JSON.stringify({ kind, message: String(message).slice(0, 2000), level,
+      room: roomCode, player: me && `${me.player_id}(${me.name})` });
+    navigator.sendBeacon ? navigator.sendBeacon("/api/client-log", new Blob([body], { type: "application/json" }))
+                         : fetch("/api/client-log", { method: "POST", body, headers: { "Content-Type": "application/json" } });
+  } catch (_) { /* 上报本身失败就算了 */ }
+}
+window.addEventListener("error", e => report("js_error", `${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`, "error"));
+window.addEventListener("unhandledrejection", e => report("promise_rejection", e.reason && (e.reason.stack || e.reason), "error"));
 
 // ---------- 大厅 ----------
 $("name").value = localStorage.getItem("tppe_name") || "";
@@ -150,9 +166,12 @@ function myName() {
 
 $("btnCreate").onclick = async () => {
   const n = myName(); if (!n) return;
-  const r = await fetch("/api/rooms", { method: "POST" });
-  const { code } = await r.json();
-  connect(code, n);
+  try {
+    const r = await fetch("/api/rooms", { method: "POST" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { code } = await r.json();
+    connect(code, n);
+  } catch (e) { toast("创建房间失败，请稍后再试"); report("create_room_failed", e, "error"); }
 };
 
 $("btnJoin").onclick = async () => {
@@ -169,9 +188,13 @@ function connect(code, name) {
   unlockSpeech();  // 借这次点击解锁浏览器朗读
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/${code}?name=${encodeURIComponent(name)}`);
+  roomCode = code;
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => {
+  const ping = setInterval(() => send({ type: "ping" }), 25000);  // 防止中间网络设备掐掉空闲连接
+  ws.onclose = e => {
+    clearInterval(ping);
     if (leaving) return;
+    if (e.code !== 4404) report("ws_closed", `code=${e.code} reason=${e.reason || "-"} clean=${e.wasClean}`);
     toast("连接断开了，刷新页面可重新加入");
     $("lobby").classList.remove("hidden");
     $("room").classList.add("hidden");
@@ -207,6 +230,7 @@ function renderState() {
   show("sentenceCard", s.phase !== "waiting");
   show("revealCard", s.phase === "reveal");
   if (s.segments) renderSentence(s);
+  renderMeme(s.phase === "reveal" ? s.meme : null);
   if (s.phase === "reveal" && spokenRound !== s.round) {
     spokenRound = s.round;
     speak(s.sentence);
@@ -237,6 +261,15 @@ function renderSentence(s) {
   }
 }
 
+function renderMeme(meme) {
+  const box = $("meme");
+  show("meme", !!meme);
+  if (!meme) return;
+  const b = document.createElement("b");
+  b.textContent = `🔥 热梗「${meme.name}」`;
+  box.replaceChildren(b, document.createTextNode(`　出处：${meme.source}　时间：${meme.date}`));
+}
+
 let renderedTaskKey = "";
 function renderTask() {
   const filling = state && state.phase === "filling";
@@ -257,7 +290,7 @@ function renderTask() {
   for (const w of task.suggestions) {
     const b = document.createElement("button");
     b.textContent = w;
-    b.onclick = () => submit(w);
+    b.onclick = () => submit(w, true);
     cands.appendChild(b);
   }
   if (!task.suggestions.length) {
@@ -271,11 +304,11 @@ function renderTask() {
   $("answer").focus();
 }
 
-function submit(text) {
+function submit(text, picked = false) {
   text = (text || "").trim();
   if (!text) return toast("写点什么再提交");
   if ([...text].length > MAX_LEN) return toast(`不能超过 ${MAX_LEN} 个字符`);
-  send({ type: "submit", element: task.element, text });
+  send({ type: "submit", element: task.element, text, picked });
 }
 
 function updateCounter() {
@@ -316,14 +349,18 @@ function unlockSpeech() {
 
 function speak(text) {
   const warn = $("ttsWarn");
-  if (!synth) { warn.textContent = "当前浏览器不支持语音朗读"; show("ttsWarn", true); return; }
+  if (!synth) { warn.textContent = "当前浏览器不支持语音朗读"; show("ttsWarn", true); report("tts_unsupported", "no speechSynthesis", "info"); return; }
   synth.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "zh-CN";
   if (zhVoice) u.voice = zhVoice;
   u.rate = 1;
+  u.onerror = e => { if (e.error !== "interrupted" && e.error !== "canceled") report("tts_error", `${e.error} voice=${zhVoice && zhVoice.name}`); };
   synth.speak(u);
-  if (!zhVoice) { warn.textContent = "没找到中文语音，朗读可能不准；换 Edge / Chrome 试试"; show("ttsWarn", true); }
+  if (!zhVoice) {
+    warn.textContent = "没找到中文语音，朗读可能不准；换 Edge / Chrome 试试"; show("ttsWarn", true);
+    report("tts_no_zh_voice", `voices=${synth.getVoices().length}`, "info");
+  }
   else show("ttsWarn", false);
 }
 

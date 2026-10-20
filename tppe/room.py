@@ -58,14 +58,16 @@ class Room:
             name, n = f"{base}{n}", n + 1
         p = Player(uuid.uuid4().hex[:8], name)
         self.players[p.id] = p
-        log.info("房间 %s: %s 加入（共 %d 人）", self.code, p.name, len(self.players))
+        log.info("room=%s 加入 player=%s(%s) phase=%s 共 %d 人", self.code, p.id, p.name,
+                 self.phase, len(self.players))
         return p
 
     def leave(self, player_id: str) -> None:
         p = self.players.pop(player_id, None)
         if not p:
             return
-        log.info("房间 %s: %s 离开（剩 %d 人）", self.code, p.name, len(self.players))
+        log.info("room=%s 离开 player=%s(%s) phase=%s 剩 %d 人", self.code, p.id, p.name,
+                 self.phase, len(self.players))
         if self.phase == FILLING and self.players:
             self._reassign_from(player_id)
 
@@ -86,7 +88,7 @@ class Room:
             raise GameError("这一轮还没结束")
         self._new_round()
 
-    def submit(self, player_id: str, element: str, text: str) -> None:
+    def submit(self, player_id: str, element: str, text: str, picked: bool = False) -> None:
         self._require_member(player_id)
         if self.phase != FILLING:
             raise GameError("现在不是填写阶段")
@@ -95,10 +97,13 @@ class Room:
         if element in self.answers:
             raise GameError("这个空已经填过了")
         try:
-            word = self.bank.submit(element, text)  # 提交即入库，不等整句完成
+            word = self.bank.submit(element, text, picked=picked)  # 提交即入库，不等整句完成
         except ValueError as e:
             raise GameError(str(e)) from e
         self.answers[element] = word
+        log.info("room=%s 第%d轮 [%s] ← %r by %s（%s）进度 %d/%d", self.code, self.round_no, element,
+                 word, self.players[player_id].name, "点选" if picked else "手填",
+                 len(self.answers), config.SLOTS_PER_ROUND)
         if len(self.answers) == config.SLOTS_PER_ROUND:
             self._reveal()
 
@@ -111,8 +116,10 @@ class Room:
         self.suggestions = {el: self.bank.suggest(el) for el in config.ELEMENTS}
         self.last_fillers = set(self.assignments.values())
         self.phase = FILLING
-        log.info("房间 %s: 第 %d 轮，模板 #%d，分配 %s", self.code, self.round_no, self.template.id,
-                 {el: self.players[pid].name for el, pid in self.assignments.items()})
+        log.info("room=%s 第%d轮开始 模板#%d%s 分配=%s 候选=%s", self.code, self.round_no,
+                 self.template.id, f"（梗：{self.template.meme['name']}）" if self.template.meme else "",
+                 {el: self.players[pid].name for el, pid in self.assignments.items()},
+                 {el: len(w) for el, w in self.suggestions.items()})
 
     def _assign(self) -> dict[str, str]:
         """4 个空位随机分配。≥4 人：选 4 人，上轮旁观的优先；<4 人：轮流多分。"""
@@ -137,7 +144,8 @@ class Room:
                 least = min(load.values())
                 new = self.rng.choice([i for i, c in load.items() if c == least])
                 self.assignments[el] = new
-                log.info("房间 %s: [%s] 改派给 %s", self.code, el, self.players[new].name)
+                log.info("room=%s 第%d轮 [%s] 掉线改派 → %s", self.code, self.round_no, el,
+                         self.players[new].name)
 
     def _reveal(self) -> None:
         self.sentence = self.template.fill(self.answers)
@@ -145,8 +153,16 @@ class Room:
             el: (self.players[pid].name if pid in self.players else "?")
             for el, pid in self.assignments.items()}
         self.phase = REVEAL
-        self.db.insert_sentence(self.code, self.template.id, self.sentence)
-        log.info("房间 %s: 揭晓「%s」", self.code, self.sentence)
+        meme = self.template.meme["name"] if self.template.meme else None
+        try:
+            sid = self.db.insert_sentence(
+                self.code, self.template.id, self.sentence, round_no=self.round_no, meme=meme,
+                answers={el: {"text": self.answers[el], "by": self.fillers_by_element[el]}
+                         for el in config.ELEMENTS})
+        except Exception:  # 历史句子只是存档，写失败不影响本轮揭晓
+            log.exception("room=%s 历史句子写库失败", self.code)
+            sid = None
+        log.info("room=%s 第%d轮揭晓 sentence#%s「%s」", self.code, self.round_no, sid, self.sentence)
 
     def _require_member(self, player_id: str) -> None:
         if player_id not in self.players:
@@ -171,6 +187,7 @@ class Room:
                 for el, pid in self.assignments.items()}
         if self.phase == REVEAL:
             st["sentence"] = self.sentence
+            st["meme"] = self.template.meme
             st["answers"] = dict(self.answers)
             for el, name in self.fillers_by_element.items():
                 st["slots"][el]["filler"] = name
@@ -204,7 +221,7 @@ class RoomManager:
             raise RuntimeError("房间号用完了")
         room = Room(code, self.bank, self.db, self.tpls, rng=random.Random(self.rng.random()))
         self.rooms[code] = room
-        log.info("创建房间 %s（当前 %d 个房间）", code, len(self.rooms))
+        log.info("room=%s 创建（当前 %d 个房间）", code, len(self.rooms))
         return room
 
     def get(self, code: str) -> Room | None:
@@ -214,4 +231,5 @@ class RoomManager:
         room = self.rooms.get(code)
         if room and room.empty:
             del self.rooms[code]
-            log.info("房间 %s 已空，销毁", code)
+            log.info("room=%s 已空，销毁（剩 %d 个房间，本房共玩 %d 轮）", code, len(self.rooms),
+                     room.round_no)
