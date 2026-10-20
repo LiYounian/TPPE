@@ -54,6 +54,13 @@
   .fills { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .fills span { margin-right: 10px; }
   .scroll { overflow-x: auto; }
+  .tpl { font-size: 15px; line-height: 2; }
+  .blank { display: inline-block; line-height: 1.4; padding: 0 8px; margin: 0 2px; border-radius: 6px;
+           border: 1.5px dashed currentColor; font-size: 13px; }
+  .raw { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .meme-info { font-size: 12px; color: var(--person); }
+  .preview { font-size: 13px; color: var(--ok); margin-top: 2px; }
+  .note { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
 </style>
 </head>
 <body>
@@ -78,6 +85,7 @@
 
     <div class="tabs">
       <button data-tab="words" class="on">词库</button>
+      <button data-tab="templates">句子模板</button>
       <button data-tab="sentences">历史句子</button>
     </div>
 
@@ -107,6 +115,22 @@
       </div>
       <div class="pager"><span id="wordInfo" class="muted"></span>
         <button id="wPrev" class="ghost small">上一页</button><button id="wNext" class="ghost small">下一页</button></div>
+    </section>
+
+    <!-- 句子模板（只读） -->
+    <section id="tab-templates" class="card hidden">
+      <p class="note">模板随代码发布（仓库里的 <code>tppe/templates.json</code>），这里只能查看和试填；想增删改模板，把需求告诉开发，改好推送后服务器约 2 分钟自动生效。</p>
+      <div class="row" style="margin-bottom:10px">
+        <select id="tKind"><option value="all">全部</option><option value="plain">普通句</option><option value="meme">热梗句</option></select>
+        <input id="tQ" type="search" placeholder="搜索模板文字或热梗" style="flex:1;min-width:160px">
+        <span id="tInfo" class="muted"></span>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>#</th><th>挖空效果（玩家看到的样子） / 原句</th><th>热梗出处</th><th>抽中</th><th>最近</th><th></th></tr></thead>
+          <tbody id="tplRows"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- 历史句子 -->
@@ -256,6 +280,47 @@ $("fQ").oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(reloadWords,
 $("wPrev").onclick = () => { wq.page--; loadWords(); };
 $("wNext").onclick = () => { wq.page++; loadWords(); };
 
+// ---------- 句子模板 ----------
+async function loadTemplates() {
+  const p = new URLSearchParams({ kind: $("tKind").value, q: $("tQ").value.trim() });
+  try {
+    const d = await api(`/api/admin/templates?${p}`);
+    $("tInfo").textContent = `显示 ${d.items.length} 条 · 共 ${d.total} 条（热梗 ${d.meme_count} 条）`;
+    const tb = $("tplRows"); tb.replaceChildren();
+    if (!d.items.length) { const tr = tb.insertRow(); const td = cell("没有符合条件的模板", "muted"); td.colSpan = 6; tr.appendChild(td); }
+    for (const t of d.items) {
+      const tr = document.createElement("tr");
+      const body = document.createElement("td");
+      const tpl = document.createElement("div"); tpl.className = "tpl";
+      for (const seg of t.segments) {
+        if (seg.text !== undefined) { tpl.appendChild(document.createTextNode(seg.text)); continue; }
+        const b = document.createElement("span"); b.className = `blank el-${seg.slot}`; b.textContent = ELEMENTS[seg.slot];
+        tpl.appendChild(b);
+      }
+      const raw = document.createElement("div"); raw.className = "raw"; raw.textContent = t.text;
+      const pv = document.createElement("div"); pv.className = "preview";
+      body.append(tpl, raw, pv);
+      const memeTd = document.createElement("td");
+      if (t.meme) {
+        const m = document.createElement("div"); m.className = "meme-info"; m.textContent = `🔥 ${t.meme.name}`;
+        const src = document.createElement("div"); src.className = "muted"; src.textContent = `${t.meme.source} · ${t.meme.date}`;
+        memeTd.append(m, src);
+      } else memeTd.textContent = "—";
+      const op = document.createElement("td");
+      op.appendChild(btn("试填", "ghost", async () => {
+        try {
+          const r = await api(`/api/admin/templates/${t.id}/preview`, { method: "POST" });
+          pv.textContent = `试填：${r.sentence}`;
+        } catch (e) { toast(e.message, true); }
+      }));
+      tr.append(cell(t.id, "muted"), body, memeTd, cell(t.used, "num"), cell(t.last_used || "—", "muted"), op);
+      tb.appendChild(tr);
+    }
+  } catch (e) { toast(e.message, true); }
+}
+$("tKind").onchange = loadTemplates;
+$("tQ").oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(loadTemplates, 300); };
+
 // ---------- 历史句子 ----------
 async function loadSentences() {
   const p = new URLSearchParams({ q: $("sQ").value.trim(), page: sq.page });
@@ -297,9 +362,8 @@ $("sNext").onclick = () => { sq.page++; loadSentences(); };
 for (const b of document.querySelectorAll(".tabs button")) {
   b.onclick = () => {
     for (const x of document.querySelectorAll(".tabs button")) x.classList.toggle("on", x === b);
-    $("tab-words").classList.toggle("hidden", b.dataset.tab !== "words");
-    $("tab-sentences").classList.toggle("hidden", b.dataset.tab !== "sentences");
-    if (b.dataset.tab === "sentences") loadSentences(); else loadWords();
+    for (const name of ["words", "templates", "sentences"]) $(`tab-${name}`).classList.toggle("hidden", b.dataset.tab !== name);
+    ({ words: loadWords, templates: loadTemplates, sentences: loadSentences })[b.dataset.tab]();
   };
 }
 

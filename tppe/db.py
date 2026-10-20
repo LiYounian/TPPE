@@ -233,6 +233,13 @@ class Database:
             out.append(d)
         return out, total
 
+    def template_usage(self) -> dict[int, dict]:
+        """每条模板被抽中（产出历史句子）的次数与最近时间：{template_id: {"count", "last"}}。"""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT template_id, COUNT(*), MAX(created_at) FROM sentences "
+                                "WHERE template_id IS NOT NULL GROUP BY template_id").fetchall()
+        return {r[0]: {"count": r[1], "last": r[2]} for r in rows}
+
     def count_sentences(self) -> int:
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]

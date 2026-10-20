@@ -1,4 +1,7 @@
-"""管理后台：词库查看 / 新增 / 改字 / 删除（隐藏）/ 恢复，历史句子，概览。
+"""管理后台：词库查看 / 新增 / 改字 / 删除（隐藏）/ 恢复，句子模板（只读 + 试填），历史句子，概览。
+
+句子模板只读：模板随代码发布（tppe/templates.json），服务器自动更新会强制对齐远端，
+在服务器上改文件会被覆盖，所以后台只提供查看和试填，修改走 git。
 
 访问控制：管理口令来自环境变量 TPPE_ADMIN_TOKEN（服务器上由 /etc/tppe/admin.env 注入，不进仓库）。
   - 没配置口令 → 整个后台（页面 + 接口）返回 404
@@ -170,6 +173,35 @@ def create_admin_router(db: Database, manager, token: str, client_ip: Callable,
     @r.post("/api/admin/words/{word_id}/restore")
     async def restore_word(word_id: int, ip: str = Depends(auth)):
         return await _set_hidden(word_id, False, ip)
+
+    @r.get("/api/admin/templates")
+    async def templates_list(kind: str = "all", q: str = "", _: str = Depends(auth)):
+        usage = db.template_usage()
+        q = q.strip()[:40]
+        items = []
+        for t in manager.tpls:
+            if kind == "meme" and not t.meme or kind == "plain" and t.meme:
+                continue
+            meme_text = " ".join(t.meme.values()) if t.meme else ""
+            if q and q not in t.text and q not in meme_text:
+                continue
+            u = usage.get(t.id, {})
+            items.append({"id": t.id, "text": t.text, "segments": t.segments(), "meme": t.meme,
+                          "used": u.get("count", 0), "last_used": u.get("last")})
+        return {"items": items, "total": len(manager.tpls),
+                "meme_count": sum(1 for t in manager.tpls if t.meme)}
+
+    @r.post("/api/admin/templates/{template_id}/preview")
+    async def template_preview(template_id: int, _: str = Depends(auth)):
+        """用当前词库（未隐藏的词）随机试填一句；某元素词库为空时用兜底词。不入库、不影响游戏。"""
+        t = next((x for x in manager.tpls if x.id == template_id), None)
+        if not t:
+            raise HTTPException(404, "模板不存在")
+        answers = {}
+        for el in config.ELEMENTS:
+            w = db.random_words(el, 1)
+            answers[el] = w[0]["text"] if w else config.FALLBACK_WORDS[el]
+        return {"id": t.id, "sentence": t.fill(answers), "answers": answers}
 
     @r.get("/api/admin/sentences")
     async def sentences(q: str = "", page: int = 1, _: str = Depends(auth)):
