@@ -88,21 +88,15 @@ def test_four_players_full_round_with_votes(client):
 
 
 def test_vote_own_word_rejected(tmp_path):
-    slow_vote = Timing(fill=30, vote=10, read_min=0.1, read_max=0.1)
-    with TestClient(create_app(tmp_path / "v.db", timing=slow_vote, tick_seconds=0.05)) as client:
+    # 不提交任何词，让所有空超时自动填（每人至少分到一个空），然后投自己的词应被拒
+    t = Timing(fill=0.3, vote=10, read_min=0.1, read_max=0.1)
+    with TestClient(create_app(tmp_path / "v.db", timing=t, tick_seconds=0.05)) as client:
         code = client.post("/api/rooms").json()["code"]
         with client.websocket_connect(f"/ws/{code}?name=甲") as a, \
                 client.websocket_connect(f"/ws/{code}?name=乙") as b:
             me = a.receive_json()["player_id"]
             b.receive_json()
             a.send_json({"type": "start"})
-            for ws in (a, b):  # 两人各分到 2 个空
-                done = set()
-                for _ in range(2):
-                    t = drain_until(ws, lambda m: m["type"] == "your_task" and m["element"]
-                                    and m["element"] not in done)
-                    done.add(t["element"])
-                    ws.send_json({"type": "submit", "element": t["element"], "text": "x"})
             voting = drain_until(a, phase_is("voting"))
             own = next(el for el, s in voting["slots"].items() if s["filler_id"] == me)
             a.send_json({"type": "vote", "element": own})

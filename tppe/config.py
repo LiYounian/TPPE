@@ -15,7 +15,7 @@ WORD_MAX_LEN = 20       # 每个词最多 20 个字符
 WORD_MIN_LEN = 1
 SUGGEST_COUNT = 3       # 候选词至多 3 个
 NAME_MAX_LEN = 10       # 昵称上限（字符）
-SLOTS_PER_ROUND = len(ELEMENTS)
+MAX_SLOTS = len(ELEMENTS)   # 一条模板最多 4 个空；每轮抽"空位数 ≥ min(人数, 4)"的模板
 RECENT_TEMPLATE_WINDOW = 10   # 同一房间避开最近 N 条模板
 
 # 回合计时（秒）。服务端计时，客户端只负责显示倒计时。
