@@ -1,17 +1,24 @@
 """短句模板：加载、校验、随机抽取、挖空展示、拼句。
 
-模板 id = 在 templates.json 里的下标 + 1，加新模板只往末尾追加，保证旧 id 不变。
+templates.json 是对象数组，每条：
+  {"id": 整数且全局唯一, "text": "含 {时间}{地点}{人物}{事件} 各一次的句子",
+   "meme": null 或 {"name": 梗名, "source": 出处（和什么有关）, "date": "YYYY[-MM[-DD]]"}}
+id 一经发布不要改动或复用（历史句子表按 id 关联）；新模板用新 id 追加。
 """
 
 import json
+import logging
 import random
 import re
 from dataclasses import dataclass
 
 from tppe import config
 
+log = logging.getLogger("tppe.templates")
+
 TEMPLATE_PATH = config.PKG_DIR / "templates.json"
 _PH_RE = re.compile(r"\{([^{}]+)\}")
+_DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
 _NAME_TO_KEY = {v: k for k, v in config.ELEMENTS.items()}
 
 
@@ -19,6 +26,7 @@ _NAME_TO_KEY = {v: k for k, v in config.ELEMENTS.items()}
 class Template:
     id: int
     text: str
+    meme: dict | None = None
 
     def segments(self) -> list[dict]:
         """把模板拆成片段，前端用来渲染挖空句：[{"text": "..."}, {"slot": "time"}, ...]"""
@@ -50,11 +58,29 @@ def check(text: str) -> None:
             raise ValueError(f"模板中 {{{name}}} 出现 {names.count(name)} 次: {text}")
 
 
+def check_meme(meme: dict | None, tid: int) -> None:
+    if meme is None:
+        return
+    for k in ("name", "source", "date"):
+        if not isinstance(meme.get(k), str) or not meme[k].strip():
+            raise ValueError(f"模板 #{tid} 的 meme 缺少字段 {k}")
+    if not _DATE_RE.match(meme["date"]):
+        raise ValueError(f"模板 #{tid} 的 meme.date 格式应为 YYYY[-MM[-DD]]: {meme['date']}")
+
+
 def load(path=TEMPLATE_PATH) -> list[Template]:
-    texts = json.loads(path.read_text(encoding="utf-8"))
-    for t in texts:
-        check(t)
-    return [Template(i + 1, t) for i, t in enumerate(texts)]
+    items = json.loads(path.read_text(encoding="utf-8"))
+    out, seen = [], set()
+    for it in items:
+        tid = it.get("id")
+        if not isinstance(tid, int) or tid <= 0 or tid in seen:
+            raise ValueError(f"模板 id 非法或重复: {tid}")
+        seen.add(tid)
+        check(it["text"])
+        check_meme(it.get("meme"), tid)
+        out.append(Template(tid, it["text"], it.get("meme")))
+    log.debug("加载模板 %d 条", len(out))
+    return out
 
 
 def pick(templates: list[Template], recent: list[int] = (), rng=random) -> Template:
